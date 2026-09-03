@@ -22,6 +22,10 @@ return (new PhpCsFixer\Config())
         // stay on the same line as short parameters instead of being hoisted onto their own.
         'method_argument_space' => ['attribute_placement' => 'ignore'],
 
+        // @Symfony forces every `throw` onto one line, which turns a constructed
+        // exception with several arguments into a 200-character statement.
+        'single_line_throw' => false,
+
         // Keep blank lines inside argument lists: a promoted constructor property carrying
         // three validation attributes needs the air around it to stay readable.
         'no_extra_blank_lines' => ['tokens' => [
