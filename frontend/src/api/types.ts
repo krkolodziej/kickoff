@@ -139,6 +139,26 @@ export interface RosterEntry {
   captain: boolean
 }
 
+export interface Fixture {
+  id: number
+  season_id: number
+  round_number: number
+  leg: number
+  home_team_id: number
+  home_team_name: string
+  home_team_short_name: string
+  away_team_id: number
+  away_team_name: string
+  away_team_short_name: string
+  kick_off_at: string | null
+}
+
+export interface GenerateFixturesPayload {
+  double_round: boolean
+  first_round_on?: string | null
+  days_between_rounds: number
+}
+
 export interface SeasonPayload {
   name: string
   start_date: string

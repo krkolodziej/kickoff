@@ -180,6 +180,9 @@ Base path `/api/v1`. Everything is JSON.
 | `DELETE` | `…/seasons/{seasonId}/teams/{seasonTeamId}` | admin | Withdraw a club |
 | `GET` `POST` | `…/teams/{seasonTeamId}/roster` | member · admin | A club's squad for that season |
 | `PATCH` `DELETE` | `…/roster/{rosterEntryId}` | admin | Number, position, captain, or removal |
+| `GET` | `…/seasons/{seasonId}/fixtures` | member | The calendar, filterable by `round` and `team` |
+| `POST` | `…/seasons/{seasonId}/fixtures/generate` | admin | Pair every registered club; refuses a second run |
+| `DELETE` | `…/seasons/{seasonId}/fixtures` | admin | Clear the calendar |
 
 Dates that are dates — a season's start and end, a player's date of birth — are emitted as
 `2026-08-15`, not as RFC 3339. A timestamp would invent a midnight and a timezone the value
@@ -251,6 +254,8 @@ the request body — so a client can apply them to its form without a lookup tab
 | `already_registered` | 409 | That club is already in this season |
 | `already_in_squad` | 409 | That player is already in this squad |
 | `squad_rule_violated` | 422 | A shirt number is taken, or the player belongs elsewhere |
+| `fixtures_already_generated` | 409 | This season has a calendar; clear it first |
+| `not_enough_clubs` | 409 | Fewer than two clubs are registered |
 
 ### Tokens
 
@@ -274,7 +279,7 @@ straight back out.
 | 2 | Organizations and per-organization roles | ✅ |
 | 3a | Leagues, clubs, players, and the list machinery | ✅ |
 | 3b | Seasons, squad registration, rosters | ✅ |
-| 4 | Round-robin fixture generation | |
+| 4 | Round-robin fixture generation | ✅ |
 | 5 | Matches, the state machine, goals and cards | |
 | 6 | Standings, player statistics, demo data | |
 | 7 | Messenger, notifications, scheduled reminders | |
