@@ -1,5 +1,6 @@
 import { CalendarPlus, Trash2 } from 'lucide-react'
 import { useMemo, useState } from 'react'
+import { Link } from 'react-router-dom'
 
 import { ApiError } from '@/api/client'
 import {
@@ -15,7 +16,9 @@ import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Dialog } from '@/components/ui/dialog'
 import { Field } from '@/components/ui/field'
+import { MatchStatusBadge } from '@/components/domain/MatchStatusBadge'
 import { formatKickOffDay, formatTime } from '@/lib/datetime'
+import { cn } from '@/lib/cn'
 
 function GenerateDialog({
   path,
@@ -149,20 +152,39 @@ function GenerateDialog({
   )
 }
 
-function FixtureRow({ fixture }: { fixture: Fixture }) {
+function FixtureRow({ fixture, path }: { fixture: Fixture; path: SeasonPath }) {
+  const played = fixture.status === 'FINISHED' || fixture.status === 'LIVE'
+
   return (
-    <li className="flex items-center gap-3 px-4 py-2.5 text-sm">
-      {/* Home reads towards the middle, away reads away from it — the newspaper arrangement,
-          which lets the eye scan a column of results without re-reading the names. */}
-      <span className="min-w-0 flex-1 truncate text-right font-medium">
-        {fixture.home_team_name}
-      </span>
+    <li>
+      <Link
+        to={`/organizations/${path.organizationId}/leagues/${path.leagueId}/seasons/${path.seasonId}/fixtures/${fixture.id}`}
+        className="flex items-center gap-3 px-4 py-2.5 text-sm transition-colors hover:bg-surface-muted"
+      >
+        {/* Home reads towards the middle, away reads away from it — the newspaper
+            arrangement, which lets the eye scan a column of results without re-reading the
+            names. */}
+        <span className="min-w-0 flex-1 truncate text-right font-medium">
+          {fixture.home_team_name}
+        </span>
 
-      <span className="tabular shrink-0 rounded-[var(--radius-control)] bg-surface-muted px-2 py-0.5 text-[12px] text-foreground-muted">
-        {formatTime(fixture.kick_off_at)}
-      </span>
+        <span
+          className={cn(
+            'tabular shrink-0 rounded-[var(--radius-control)] px-2 py-0.5 text-[12px]',
+            played
+              ? 'bg-foreground font-semibold text-background'
+              : 'bg-surface-muted text-foreground-muted',
+          )}
+        >
+          {played ? `${fixture.home_score}–${fixture.away_score}` : formatTime(fixture.kick_off_at)}
+        </span>
 
-      <span className="min-w-0 flex-1 truncate font-medium">{fixture.away_team_name}</span>
+        <span className="min-w-0 flex-1 truncate font-medium">{fixture.away_team_name}</span>
+
+        {fixture.status === 'SCHEDULED' ? null : (
+          <MatchStatusBadge status={fixture.status} className="shrink-0" />
+        )}
+      </Link>
     </li>
   )
 }
@@ -259,7 +281,7 @@ export function FixturesPanel({
 
               <ul className="surface-panel divide-y divide-border">
                 {roundFixtures.map((fixture) => (
-                  <FixtureRow key={fixture.id} fixture={fixture} />
+                  <FixtureRow key={fixture.id} fixture={fixture} path={path} />
                 ))}
               </ul>
             </div>

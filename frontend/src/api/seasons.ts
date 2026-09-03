@@ -153,6 +153,21 @@ export function useRemoveFromSquad(path: SeasonPath, seasonTeamId: number) {
   )
 }
 
+/**
+ * The squad of one registered club, addressed by the club rather than by the season-team row.
+ *
+ * The match screen knows which clubs are playing, not which SeasonTeam rows they correspond
+ * to, so this resolves that in one place instead of at every call site.
+ */
+export function useSquadOf(path: SeasonPath, teamId: number | null) {
+  const seasonTeams = useSeasonTeams(path)
+  const seasonTeam = seasonTeams.data?.find((row) => row.team_id === teamId)
+
+  const roster = useRoster(path, seasonTeam?.id ?? null)
+
+  return { players: roster.data ?? [], isPending: seasonTeams.isPending || roster.isPending }
+}
+
 export function useFixtures(path: SeasonPath) {
   return useQuery({
     queryKey: qk.fixtures(path.organizationId, path.leagueId, path.seasonId),

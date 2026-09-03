@@ -58,6 +58,16 @@ dokumentu rośnie z każdym etapem.
   - [4.5 Determinizm](#45-determinizm)
   - [4.6 Pułapki Stage 4](#46-pułapki-stage-4)
   - [Pytania na rozmowę](#pytania-na-rozmowę--stage-4)
+- [Stage 5 — mecze, maszyna stanów i zdarzenia](#stage-5--mecze-maszyna-stanów-i-zdarzenia)
+  - [5.1 Dlaczego nie ma encji Match](#51-dlaczego-nie-ma-encji-match)
+  - [5.2 Maszyna stanów jako dane](#52-maszyna-stanów-jako-dane)
+  - [5.3 Dlaczego nie symfony/workflow](#53-dlaczego-nie-symfonyworkflow)
+  - [5.4 Gol i wynik w jednej transakcji](#54-gol-i-wynik-w-jednej-transakcji)
+  - [5.5 409 kontra 422](#55-409-kontra-422)
+  - [5.6 Zegar z wstrzyknięcia](#56-zegar-z-wstrzyknięcia)
+  - [5.7 Serwer mówi, co wolno](#57-serwer-mówi-co-wolno)
+  - [5.8 Pułapki Stage 5](#58-pułapki-stage-5)
+  - [Pytania na rozmowę](#pytania-na-rozmowę--stage-5)
 - [Django → Symfony](#django--symfony)
 
 ---
@@ -1116,6 +1126,180 @@ czerwono.
 
 ---
 
+## Stage 5 — mecze, maszyna stanów i zdarzenia
+
+### 5.1 Dlaczego nie ma encji Match
+
+Zacznijmy od faktu, który rozstrzyga sprawę zanim zacznie się dyskusja o modelowaniu:
+
+```
+$ php -l -r 'class Match {}'
+PHP Parse error: syntax error, unexpected token "match", expecting identifier
+```
+
+**`Match` jest słowem zastrzeżonym w PHP 8.** `match` to wyrażenie językowe, a nazwy klas są
+niewrażliwe na wielkość liter — więc `class Match {}` się nie kompiluje. Encja musiałaby się
+nazywać `GameMatch`, `MatchRecord` albo podobnie, czyli nie tak, jak się nazywa.
+
+Ale nawet gdyby PHP na to pozwalał, podział byłby artefaktem. Aplikacja, którą to zastępuje,
+miała `Fixture` i `Match` w relacji jeden-do-jednego. Mecz i spotkanie to **to samo zdarzenie w
+dwóch momentach** — przed gwizdkiem i po nim. Rozdzielenie kupuje joina przy każdym odczycie i
+krok operatora („utwórz mecz"), który nie znaczy nic dla kogoś prowadzącego ligę.
+
+Więc `Fixture` dostał `status`, wynik i dwa znaczniki czasu. Zniknął jeden join, jeden endpoint
+i jeden krok w interfejsie.
+
+### 5.2 Maszyna stanów jako dane
+
+`backend/src/Entity/MatchStatus.php`
+
+```php
+return match ($this) {
+    self::Scheduled => [self::Live, self::Cancelled, self::Postponed],
+    self::Postponed => [self::Scheduled, self::Live, self::Cancelled],
+    self::Live      => [self::Finished, self::Cancelled, self::Postponed],
+    self::Finished, self::Cancelled => [],
+};
+```
+
+Cała reguła w jednym miejscu, jako **tablica**, a nie rozsypane `if`-y po serwisie. Trzy zyski:
+
+1. da się przeczytać w całości,
+2. da się przetestować **wyczerpująco** — test sprawdza wszystkie **25** kombinacji, nie te
+   kilka, o których ktoś pamiętał,
+3. da się **wysłać klientowi**, żeby przycisk był wyłączony zamiast rozczarowywać.
+
+Detal, który łatwo przeoczyć: `POSTPONED` **nie jest** stanem końcowym. Mecz odwołany z powodu
+deszczu musi móc wrócić do kalendarza, inaczej ginie na cały sezon.
+
+I test, którego brak byłby cichą dziurą: **żaden stan nie przechodzi w samego siebie.** Bez tego
+„rozpocznij" na trwającym meczu wyglądałoby jak nieszkodliwy no-op, a przycisk nigdy by się nie
+wyłączył.
+
+Specyfikacja w teście jest **wypisana ręcznie**, nie wyprowadzona z enuma. Test, który pyta kod,
+jakie są reguły, zgadza się z każdym błędem, jaki kod ma.
+
+### 5.3 Dlaczego nie symfony/workflow
+
+Bundle jest dobrym narzędziem, gdy przejścia mają strażników, listenery i metadane — zamówienie,
+które wysyła maila do magazynu. Tutaj **cała maszyna to dziewięć linijek powyżej**. Workflow
+dołożyłby plik konfiguracyjny, usługę, słownictwo i warstwę pośrednią, żeby te dziewięć linijek
+zastąpić.
+
+Warto wiedzieć, że istnieje, i umieć powiedzieć, dlaczego go nie ma. To jest częstsze pytanie
+rekrutacyjne niż „jak skonfigurować workflow".
+
+### 5.4 Gol i wynik w jednej transakcji
+
+To jest najważniejsza linijka całego etapu.
+
+Gol to **dwie** zmiany: wiersz zdarzenia i podbicie wyniku. Zapisane osobno, awaria między nimi
+zostawia wynik, który nie zgadza się z własną historią — i **nic w aplikacji nigdy by tego nie
+zauważyło**, bo obie liczby z osobna wyglądają sensownie.
+
+```php
+return $this->entityManager->wrapInTransaction(function () { … });
+```
+
+Stąd też decyzja, że zdarzenia są **tylko do dopisywania**: nie ma PATCH ani DELETE. Skoro wynik
+jest wyprowadzony z tych wierszy, edytowalne zdarzenie to wynik, który może po cichu przestać
+pasować do swojej historii. Pomyłkę poprawia się dopisując prawdę — tak jak działa notes
+sędziego.
+
+### 5.5 409 kontra 422
+
+Rozróżnienie, które warto umieć wypowiedzieć:
+
+| | znaczy | tutaj |
+| --- | --- | --- |
+| **422** | „popraw dane" | zawodnik spoza składu, klub spoza meczu, minuta 200 |
+| **409** | „świat nie jest w tym stanie" | zakończenie meczu, który się nie zaczął; gol przed gwizdkiem |
+
+Zakończenie meczu to **doskonale poprawne** żądanie — po prostu nie dla meczu, który jeszcze nie
+wystartował. Nic w payloadzie nie jest złe, więc 422 byłoby kłamstwem.
+
+Komunikat mówi, **co wolno**, żeby klient, który wypadł z synchronizacji, mógł się pozbierać bez
+zgadywania:
+
+```
+Cannot go from scheduled to finished. Allowed from here: live, cancelled, postponed.
+```
+
+### 5.6 Zegar z wstrzyknięcia
+
+`MatchLifecycle` bierze `Psr\Clock\ClockInterface`, nigdy `new DateTimeImmutable()`.
+
+To nie ceremonia. Zadanie przypomnień w Stage 7 musi odpowiedzieć na pytanie „które mecze
+zaczynają się za mniej więcej 24 godziny", a jedyny rozsądny sposób przetestowania tego to
+**zamrożenie zegara** (`MockClock`). Sięgnij po prawdziwy czas w kodzie, a test staje się
+`sleep`em.
+
+Drugi detal, tego samego rodzaju: wznowienie przełożonego meczu **zachowuje** pierwotny gwizdek
+(`$fixture->getStartedAt() ?? $now`), bo każda zapisana minuta jest od niego liczona. Ale
+odesłanie meczu z powrotem do kalendarza **czyści** go — inaczej przełożony mecz wyglądałby na
+rozegrany.
+
+### 5.7 Serwer mówi, co wolno
+
+`FixtureResource` niesie `allowed_transitions` — listę przejść, które serwer przyjąłby *teraz*.
+
+Frontend **czyta tę listę**, zamiast reimplementować maszynę:
+
+```tsx
+{fixture.allowed_transitions.map((target) => <Button …>{TRANSITION_LABEL[target]}</Button>)}
+```
+
+Dzięki temu przyciski nie mogą się rozjechać z regułami, bo klient nie ma własnej kopii reguł.
+To jest ta sama zasada co przy `fields` w kopercie błędów: serwer jest źródłem prawdy, klient
+tylko go renderuje.
+
+### 5.8 Pułapki Stage 5
+
+**Test z błędnym założeniem, nie kod z błędem.** `?status=SCHEDULED,LIVE` zwracało 1 zamiast 2 —
+bo przy **dwóch** klubach kalendarz ma dokładnie **jeden** mecz. Filtr działał; to test pytał o
+niemożliwe. Warto zauważyć różnicę, zanim zacznie się „naprawiać" poprawny kod.
+
+**Wartości domyślne kolumn przy ALTER TABLE.** Dodanie `status` do istniejącej tabeli wymaga
+`options: ['default' => 'SCHEDULED']`, inaczej migracja wywala się na wierszach, które już tam
+są. To samo dla wyników (`default => 0`).
+
+**`@return list<T>` po zmianie sygnatury.** Dodanie parametru do `findForSeason()` przepisało
+docbloc i PHPStan natychmiast zauważył brak typu elementu tablicy.
+
+**Żółty i czerwony tylko na kartki.** Te dwa kolory pojawiają się w całej aplikacji **wyłącznie**
+w `MatchTimeline` — dokładnie po to, żeby żółta kartka nigdy nie została odczytana jako
+ostrzeżenie interfejsu. Status meczu ma pięć **strukturalnie** różnych traktowań (pulsująca
+kropka, wypełnienie, przekreślenie, kreska z lewej), nie pięć kolorów: każde czyta się poprawnie
+w skali szarości.
+
+### Pytania na rozmowę — Stage 5
+
+**Dlaczego nie ma encji `Match`?**
+Bo `Match` to słowo zastrzeżone w PHP 8 i `class Match {}` się nie kompiluje. Ale niezależnie od
+tego podział na `Fixture` i `Match` byłby artefaktem: to to samo zdarzenie przed gwizdkiem i po
+nim, a relacja jeden-do-jednego kosztowałaby joina przy każdym odczycie i krok „utwórz mecz",
+który nic nie znaczy.
+
+**Czemu gol i wynik muszą być w jednej transakcji?**
+Bo to dwie zmiany opisujące jeden fakt. Rozdzielone, awaria między nimi zostawia wynik
+niezgodny z własną historią — i nic tego nie wykryje, bo obie liczby osobno wyglądają
+poprawnie. Z tego samego powodu zdarzenia są tylko do dopisywania.
+
+**Kiedy 409, a kiedy 422?**
+422 mówi „popraw dane", 409 mówi „świat nie jest w tym stanie". Zakończenie meczu to poprawne
+żądanie — po prostu nie dla meczu, który się nie zaczął, więc 422 byłoby kłamstwem o payloadzie.
+
+**Po co `ClockInterface` zamiast `new DateTimeImmutable()`?**
+Żeby dało się zamrozić czas w teście. Bez tego test reguły „przypomnij 24 godziny przed
+gwizdkiem" musiałby albo czekać, albo nie istnieć.
+
+**Skąd frontend wie, które przyciski wyłączyć?**
+Z odpowiedzi serwera — `allowed_transitions`. Reimplementacja maszyny po stronie klienta
+oznaczałaby dwie kopie reguł, które prędzej czy później się rozjadą; czytanie listy oznacza
+jedną.
+
+---
+
 ## Django → Symfony
 
 Tabela rośnie z każdym etapem.
@@ -1147,3 +1331,6 @@ Tabela rośnie z każdym etapem.
 | `select_for_update()` | `EntityManager::find(..., LockMode::PESSIMISTIC_WRITE)` | `src/Domain/Fixture/FixtureGenerator.php` |
 | serwis w `services.py` bez importu modeli | klasa w `src/Domain/**` bez Doctrine | `src/Domain/Fixture/RoundRobinScheduler.php` |
 | `SimpleTestCase` (bez bazy) | `PHPUnit\Framework\TestCase` (bez kernela) | `tests/Domain/RoundRobinSchedulerTest.php` |
+| `transaction.atomic()` wokół zdarzenia i wyniku | `EntityManager::wrapInTransaction()` | `src/Domain/Match/MatchEventRecorder.php` |
+| `django.utils.timezone.now()` | `Psr\Clock\ClockInterface` (podmienialny na `MockClock`) | `src/Domain/Match/MatchLifecycle.php` |
+| `TextChoices` + `ALLOWED_TRANSITIONS` w serwisie | metoda na backed enumie | `src/Entity/MatchStatus.php` |

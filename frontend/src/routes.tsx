@@ -6,6 +6,7 @@ import { AuthLayout } from '@/features/auth/AuthLayout'
 import { SignInPage } from '@/features/auth/SignInPage'
 import { SignUpPage } from '@/features/auth/SignUpPage'
 import { LeaguePage } from '@/features/competitions/LeaguePage'
+import { MatchPage } from '@/features/competitions/MatchPage'
 import {
   FixturesSection,
   SquadsSection,
@@ -51,6 +52,12 @@ export const router = createBrowserRouter([
               { path: 'squads', element: <SquadsSection /> },
               { path: 'fixtures', element: <FixturesSection /> },
             ],
+          },
+          {
+            // Outside the season's tab shell: a match is its own screen, linkable and worth
+            // keeping open on a phone at the side of a pitch.
+            path: '/organizations/:organizationId/leagues/:leagueId/seasons/:seasonId/fixtures/:fixtureId',
+            element: <MatchPage />,
           },
           {
             path: '/organizations/:organizationId',

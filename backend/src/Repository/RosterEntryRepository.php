@@ -6,7 +6,9 @@ namespace App\Repository;
 
 use App\Entity\Player;
 use App\Entity\RosterEntry;
+use App\Entity\Season;
 use App\Entity\SeasonTeam;
+use App\Entity\Team;
 use Doctrine\Bundle\DoctrineBundle\Repository\ServiceEntityRepository;
 use Doctrine\Persistence\ManagerRegistry;
 
@@ -65,6 +67,29 @@ class RosterEntryRepository extends ServiceEntityRepository
         }
 
         return ((int) $qb->getQuery()->getSingleScalarResult()) > 0;
+    }
+
+    /**
+     * Is this player in that club's squad, for that season?
+     *
+     * The season is part of the question and not an afterthought: a player who turned out for
+     * Stal last year is not eligible for them this year unless somebody registered him again.
+     */
+    public function isRosteredFor(Season $season, Team $team, Player $player): bool
+    {
+        $count = $this->createQueryBuilder('r')
+            ->select('COUNT(r.id)')
+            ->innerJoin('r.seasonTeam', 'st')
+            ->where('r.player = :player')
+            ->andWhere('st.season = :season')
+            ->andWhere('st.team = :team')
+            ->setParameter('player', $player)
+            ->setParameter('season', $season)
+            ->setParameter('team', $team)
+            ->getQuery()
+            ->getSingleScalarResult();
+
+        return ((int) $count) > 0;
     }
 
     public function currentCaptain(SeasonTeam $seasonTeam): ?RosterEntry

@@ -139,6 +139,17 @@ export interface RosterEntry {
   captain: boolean
 }
 
+export type MatchStatus = 'SCHEDULED' | 'LIVE' | 'FINISHED' | 'CANCELLED' | 'POSTPONED'
+
+export type MatchEventType = 'GOAL' | 'YELLOW_CARD' | 'RED_CARD' | 'SUBSTITUTION'
+
+export const MATCH_EVENT_TYPES = [
+  'GOAL',
+  'YELLOW_CARD',
+  'RED_CARD',
+  'SUBSTITUTION',
+] as const satisfies readonly MatchEventType[]
+
 export interface Fixture {
   id: number
   season_id: number
@@ -151,6 +162,42 @@ export interface Fixture {
   away_team_name: string
   away_team_short_name: string
   kick_off_at: string | null
+  status: MatchStatus
+  home_score: number
+  away_score: number
+  started_at: string | null
+  finished_at: string | null
+  /**
+   * What the server would accept right now. Read rather than recomputed, so the buttons and
+   * the state machine cannot drift apart — the client owns no copy of the rules.
+   */
+  allowed_transitions: MatchStatus[]
+}
+
+export interface MatchEvent {
+  id: number
+  fixture_id: number
+  type: MatchEventType
+  minute: number
+  team_id: number
+  home: boolean
+  player_id: number
+  player_name: string
+  related_player_id: number | null
+  related_player_name: string | null
+}
+
+export interface MatchEventPayload {
+  type: MatchEventType
+  minute: number
+  team_id: number
+  player_id: number
+  related_player_id?: number | null
+}
+
+/** A match still being played is the only thing worth polling for. */
+export function isLive(fixture: Fixture): boolean {
+  return fixture.status === 'LIVE'
 }
 
 export interface GenerateFixturesPayload {
