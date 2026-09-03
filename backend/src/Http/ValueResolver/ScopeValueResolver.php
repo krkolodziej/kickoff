@@ -9,6 +9,8 @@ use App\Scope\LeagueScope;
 use App\Scope\OrganizationScope;
 use App\Scope\ScopeFactory;
 use App\Scope\ScopeInterface;
+use App\Scope\SeasonScope;
+use App\Scope\SeasonTeamScope;
 use Symfony\Bundle\SecurityBundle\Security;
 use Symfony\Component\HttpFoundation\Request;
 use Symfony\Component\HttpKernel\Controller\ValueResolverInterface;
@@ -68,6 +70,19 @@ final class ScopeValueResolver implements ValueResolverInterface
                 $user,
                 $this->routeId($request, 'organizationId'),
                 $this->routeId($request, 'leagueId'),
+            ),
+            SeasonScope::class => $this->scopeFactory->seasonScope(
+                $user,
+                $this->routeId($request, 'organizationId'),
+                $this->routeId($request, 'leagueId'),
+                $this->routeId($request, 'seasonId'),
+            ),
+            SeasonTeamScope::class => $this->scopeFactory->seasonTeamScope(
+                $user,
+                $this->routeId($request, 'organizationId'),
+                $this->routeId($request, 'leagueId'),
+                $this->routeId($request, 'seasonId'),
+                $this->routeId($request, 'seasonTeamId'),
             ),
             default => throw new \LogicException(\sprintf('No factory is registered for the scope "%s".', $type)),
         };

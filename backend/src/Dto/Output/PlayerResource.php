@@ -5,6 +5,8 @@ declare(strict_types=1);
 namespace App\Dto\Output;
 
 use App\Entity\Player;
+use Symfony\Component\Serializer\Attribute\Context;
+use Symfony\Component\Serializer\Normalizer\DateTimeNormalizer;
 
 final readonly class PlayerResource
 {
@@ -14,6 +16,8 @@ final readonly class PlayerResource
         public string $firstName,
         public string $lastName,
         public string $fullName,
+        /* A date, not an instant — see SeasonResource for what that costs otherwise. */
+        #[Context([DateTimeNormalizer::FORMAT_KEY => 'Y-m-d'])]
         public ?\DateTimeImmutable $dateOfBirth,
         public \DateTimeImmutable $createdAt,
     ) {

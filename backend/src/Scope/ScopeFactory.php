@@ -7,6 +7,8 @@ namespace App\Scope;
 use App\Entity\User;
 use App\Repository\LeagueRepository;
 use App\Repository\OrganizationMembershipRepository;
+use App\Repository\SeasonRepository;
+use App\Repository\SeasonTeamRepository;
 use Symfony\Component\HttpKernel\Exception\NotFoundHttpException;
 
 /**
@@ -23,6 +25,8 @@ final class ScopeFactory
     public function __construct(
         private readonly OrganizationMembershipRepository $memberships,
         private readonly LeagueRepository $leagues,
+        private readonly SeasonRepository $seasons,
+        private readonly SeasonTeamRepository $seasonTeams,
     ) {
     }
 
@@ -50,6 +54,49 @@ final class ScopeFactory
         return new LeagueScope(
             new OrganizationScope($league->getOrganization(), $row['role']),
             $league,
+        );
+    }
+
+    public function seasonScope(User $user, int $organizationId, int $leagueId, int $seasonId): SeasonScope
+    {
+        $row = $this->seasons->findScoped($user, $organizationId, $leagueId, $seasonId);
+
+        if (null === $row) {
+            throw new NotFoundHttpException();
+        }
+
+        $season = $row[0];
+        $league = $season->getLeague();
+
+        return new SeasonScope(
+            new LeagueScope(new OrganizationScope($league->getOrganization(), $row['role']), $league),
+            $season,
+        );
+    }
+
+    public function seasonTeamScope(
+        User $user,
+        int $organizationId,
+        int $leagueId,
+        int $seasonId,
+        int $seasonTeamId,
+    ): SeasonTeamScope {
+        $row = $this->seasonTeams->findScoped($user, $organizationId, $leagueId, $seasonId, $seasonTeamId);
+
+        if (null === $row) {
+            throw new NotFoundHttpException();
+        }
+
+        $seasonTeam = $row[0];
+        $season = $seasonTeam->getSeason();
+        $league = $season->getLeague();
+
+        return new SeasonTeamScope(
+            new SeasonScope(
+                new LeagueScope(new OrganizationScope($league->getOrganization(), $row['role']), $league),
+                $season,
+            ),
+            $seasonTeam,
         );
     }
 }

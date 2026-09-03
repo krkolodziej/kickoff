@@ -28,6 +28,21 @@ final class PlayerApiTest extends ApiTestCase
         self::assertSame('Jan Kowalski', $this->json()['full_name']);
     }
 
+    public function testADateOfBirthIsEmittedAsADate(): void
+    {
+        $owner = UserFactory::createOne();
+        $organization = OrganizationFactory::createOne(['createdBy' => $owner]);
+
+        $this->request(
+            'POST',
+            '/api/v1/organizations/'.$organization->getId().'/players',
+            ['first_name' => 'Jan', 'last_name' => 'Kowalski', 'date_of_birth' => '1998-04-12'],
+            $this->signIn($owner),
+        );
+
+        self::assertSame('1998-04-12', $this->json()['date_of_birth']);
+    }
+
     public function testADateOfBirthInTheFutureIsRefused(): void
     {
         $owner = UserFactory::createOne();
