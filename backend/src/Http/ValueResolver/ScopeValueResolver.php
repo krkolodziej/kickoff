@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Http\ValueResolver;
 
 use App\Entity\User;
+use App\Scope\LeagueScope;
 use App\Scope\OrganizationScope;
 use App\Scope\ScopeFactory;
 use App\Scope\ScopeInterface;
@@ -62,6 +63,11 @@ final class ScopeValueResolver implements ValueResolverInterface
             OrganizationScope::class => $this->scopeFactory->organizationScope(
                 $user,
                 $this->routeId($request, 'organizationId'),
+            ),
+            LeagueScope::class => $this->scopeFactory->leagueScope(
+                $user,
+                $this->routeId($request, 'organizationId'),
+                $this->routeId($request, 'leagueId'),
             ),
             default => throw new \LogicException(\sprintf('No factory is registered for the scope "%s".', $type)),
         };

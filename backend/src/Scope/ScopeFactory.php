@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Scope;
 
 use App\Entity\User;
+use App\Repository\LeagueRepository;
 use App\Repository\OrganizationMembershipRepository;
 use Symfony\Component\HttpKernel\Exception\NotFoundHttpException;
 
@@ -21,6 +22,7 @@ final class ScopeFactory
 {
     public function __construct(
         private readonly OrganizationMembershipRepository $memberships,
+        private readonly LeagueRepository $leagues,
     ) {
     }
 
@@ -33,5 +35,21 @@ final class ScopeFactory
         }
 
         return new OrganizationScope($membership->getOrganization(), $membership->getRole());
+    }
+
+    public function leagueScope(User $user, int $organizationId, int $leagueId): LeagueScope
+    {
+        $row = $this->leagues->findScoped($user, $organizationId, $leagueId);
+
+        if (null === $row) {
+            throw new NotFoundHttpException();
+        }
+
+        $league = $row[0];
+
+        return new LeagueScope(
+            new OrganizationScope($league->getOrganization(), $row['role']),
+            $league,
+        );
     }
 }

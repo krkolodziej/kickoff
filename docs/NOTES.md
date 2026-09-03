@@ -31,6 +31,15 @@ dokumentu rośnie z każdym etapem.
   - [2.6 Slug: sufiks zamiast odmowy](#26-slug-sufiks-zamiast-odmowy)
   - [2.7 Pułapki Stage 2](#27-pułapki-stage-2)
   - [Pytania na rozmowę](#pytania-na-rozmowę--stage-2)
+- [Stage 3a — ligi, kluby, zawodnicy i maszyneria list](#stage-3a--ligi-kluby-zawodnicy-i-maszyneria-list)
+  - [3a.1 Klub nie należy do ligi](#3a1-klub-nie-należy-do-ligi)
+  - [3a.2 ListQuery i MapQueryString](#3a2-listquery-i-mapquerystring)
+  - [3a.3 Paginacja opt-in](#3a3-paginacja-opt-in)
+  - [3a.4 Sortowanie: whitelista i remis](#3a4-sortowanie-whitelista-i-remis)
+  - [3a.5 Slug per organizacja](#3a5-slug-per-organizacja)
+  - [3a.6 URL jako stan listy](#3a6-url-jako-stan-listy)
+  - [3a.7 Pułapki Stage 3a](#3a7-pułapki-stage-3a)
+  - [Pytania na rozmowę](#pytania-na-rozmowę--stage-3a)
 - [Django → Symfony](#django--symfony)
 
 ---
@@ -595,6 +604,163 @@ go edytować ani usunąć przez API.
 
 ---
 
+## Stage 3a — ligi, kluby, zawodnicy i maszyneria list
+
+### 3a.1 Klub nie należy do ligi
+
+Najbardziej kuszący błąd modelowania w tej domenie: `Team` z kluczem obcym do `League`.
+
+Klub, który awansuje, spada albo przenosi się między rozgrywkami, **jest tym samym klubem**.
+Trzymanie go pod ligą rozwidlałoby jego tożsamość przy każdym ruchu, a razem z nią historię:
+tabele, strzelców, spotkania. Dlatego `Team` i `Player` należą do **organizacji**, a przypisanie
+„ten klub gra w tym sezonie tej ligi" to osobny wiersz (`SeasonTeam`, Stage 3b).
+
+Ta sama logika przy zawodniku. `Player` to osoba; to, że w sezonie 2026 gra w Stali z numerem 9
+i jest kapitanem, to `RosterEntry`. Bez tego rozdziału transfer oznaczałby wpisanie zawodnika
+od nowa, a jego dorobek zostałby przy poprzednim klubie.
+
+`Player::$dateOfBirth` jest **nullowalne** i to nie jest lenistwo. W lidze amatorskiej
+zawodnik bywa zgłaszany, zanim ktokolwiek sprawdzi datę urodzenia. Schemat, który tego
+zabrania, nie sprawia, że dane są lepsze — sprawia, że ktoś wpisuje `1900-01-01`. A to jest
+gorsze, bo *wygląda* jak dane.
+
+### 3a.2 ListQuery i MapQueryString
+
+`backend/src/Dto/Input/ListQuery.php`
+
+Cztery parametry, których używa każda kolekcja: `search`, `order`, `page`, `page_size`.
+Konsumowane przez `#[MapQueryString]`, czyli **tym samym serializerem i walidatorem** co ciało
+żądania. Konsekwencja: `page_size=0` to 422 z komunikatem, a nie dzielenie przez zero trzy
+warstwy niżej. Konwerter nazw działa tak samo, więc `page_size` z query stringa ląduje na
+`$pageSize`.
+
+Domyślna wartość parametru w sygnaturze (`ListQuery $query = new ListQuery()`) jest konieczna —
+bez niej żądanie bez query stringa w ogóle by nie zmapowało.
+
+### 3a.3 Paginacja opt-in
+
+Bez `page` i `page_size` endpoint zwraca **zwykłą tablicę JSON**. Z którymkolwiek z nich —
+kopertę `{count, page, page_size, next, previous, results}`.
+
+Uzasadnienie: w tej aplikacji dominują kolekcje po kilkanaście wierszy (12 klubów, 18
+zawodników w składzie). Owijanie ich w kopertę to ceremonia bez treści, a klient i tak musiałby
+sięgać po `.results`. Kto potrzebuje przejść po długiej liście, prosi o stronę.
+
+`next` i `previous` to **numery stron**, nie adresy URL. DRF zwraca adresy i dla API do
+crawlowania to sensowny wybór, ale wtedy w każdej odpowiedzi siedzi publiczna nazwa hosta —
+która musi być poprawna za proxy, w testach i w kontenerze. Klient, który zna endpoint, potrafi
+dopisać `?page=`.
+
+`Doctrine\ORM\Tools\Pagination\Paginator` istnieje po to, żeby `COUNT` po joinie był
+poprawny. Argument `fetchJoinCollection` jest tu `false`, bo te zapytania joinują wyłącznie
+relacje to-one. Trzeba go włączyć, gdy zapytanie fetch-joinuje **kolekcję** — inaczej `LIMIT`
+obcina joinowane wiersze zamiast encji i strona wraca krótsza, niż powinna.
+
+### 3a.4 Sortowanie: whitelista i remis
+
+`backend/src/Repository/Listing.php`
+
+Whitelista mapuje **nazwę z API** na **wyrażenie DQL**:
+
+```php
+private const ORDERING = [
+    'name' => 'l.name',
+    'slug' => 'l.slug',
+    'created_at' => 'l.createdAt',
+];
+```
+
+Dzięki temu wołający nigdy nie nazywa kolumny. Zmiana nazwy właściwości nie psuje API, a
+`order` nie posłuży do sortowania po czymś, czego zasób w ogóle nie wystawia.
+
+Nieznane pole to **400 z listą dozwolonych**, nie ciche zignorowanie. Sortowanie, które nic nie
+robi, to błąd, który dożywa produkcji, bo odpowiedź nadal wygląda sensownie — tylko w złej
+kolejności.
+
+Drugi szczegół, mniej oczywisty: po polu sortowania zawsze dokładany jest **remis po kluczu
+głównym**. Bez niego dwa kluby o tej samej nazwie mogą zamienić się miejscami między
+żądaniami, a czytelnik przeglądający strony zobaczy jeden z nich dwa razy, a drugiego nigdy.
+Przy stronicowaniu to nie teoria — to zależy od planu zapytania.
+
+### 3a.5 Slug per organizacja
+
+Unikalność sluga jest **na parę (organizacja, slug)**, nie globalna. Dwa związki mogą
+prowadzić „Ligę Okręgową" i żaden nie ma praw do tych słów. Test to przypina.
+
+Sufiks `-2` pojawia się dopiero przy kolizji **wewnątrz jednej** organizacji.
+
+### 3a.6 URL jako stan listy
+
+`frontend/src/hooks/useListParams.ts`
+
+Wyszukiwanie i numer strony żyją w query stringu, nie w `useState`. Kosztuje to tyle samo, a
+daje: możliwość podlinkowania przefiltrowanego widoku, działający przycisk wstecz i to, że
+odświeżenie nie wyrzuca cichaczem na pierwszą stronę bez filtra.
+
+Zmiana wyszukiwania **kasuje numer strony**, bo strona 4 węższego wyniku zwykle nie istnieje —
+a pusta tabela czyta się jak „nie ma takiego klubu", nie jak „zła strona".
+
+Zakładki też są trasami (`/organizations/1/clubs`), nie stanem komponentu. `aria-current`
+przychodzi wtedy od routera, a nie z ręcznie pilnowanej flagi.
+
+`placeholderData: (previous) => previous` w TanStack Query sprawia, że przy przejściu na kolejną
+stronę tabela przez moment pokazuje poprzednie wiersze zamiast się opróżniać. Drobiazg, który
+robi całą różnicę w odczuciu płynności.
+
+### 3a.7 Pułapki Stage 3a
+
+**Git Bash psuje nie-ASCII w `curl -d`.** Wysyłanie inline `-d '{"name":"Stal Rzeszów"}'`
+kończyło się `400 invalid_payload`, co wyglądało jak błąd aplikacji. To samo ciało z pliku
+(`--data-binary @plik.json`) daje 201 i slug `stal-rzeszow`. Morał ogólniejszy: **zanim zgłosisz
+błąd w kodzie, sprawdź, czy nie zgłaszasz błędu swojego narzędzia.**
+
+**`array_values()` na czymś, co już jest listą** — PHPStan słusznie krzyczy, że wywołanie nic
+nie robi. Wynik `array_map` po liście jest listą.
+
+**Pole w `knownFields`, którego nie ma w formularzu.** Dialogi ligi i klubu nie mają inputu na
+slug, więc `'slug'` na liście znanych pól to błąd typów (i logiki): komunikat o slugu należy do
+banera formularza, bo nie ma pola, przy którym mógłby stanąć.
+
+**`setState` w efekcie, znowu.** `SearchInput` synchronizował pole z URL-em efektem. Poprawny
+wzorzec z dokumentacji Reacta to **korekta stanu w trakcie renderu**:
+
+```tsx
+if (value !== lastValue) {
+  setLastValue(value)
+  setDraft(value)
+}
+```
+
+Efekt najpierw namalowałby nieaktualną wartość, a dopiero potem przerenderował.
+
+**Fast refresh, znowu.** `OrganizationPage.tsx` eksportował komponent *i* hooka kontekstu →
+moduł wypada z fast refreshu. Hook wyprowadzony do `organization-context.ts`.
+
+### Pytania na rozmowę — Stage 3a
+
+**Czemu `Team` nie ma klucza obcego do `League`?**
+Bo klub przetrwa awans, spadek i zmianę rozgrywek, a klucz obcy rozwidliłby jego tożsamość
+przy każdym takim ruchu — razem z całą historią. Związek „klub gra w tym sezonie" to osobny
+wiersz, bo to fakt o sezonie, nie o klubie.
+
+**Po co `Doctrine\ORM\Tools\Pagination\Paginator`, skoro jest `setMaxResults`?**
+Bo przy joinie jedna encja daje wiele wierszy wyniku. `LIMIT 10` obcina wtedy wiersze, nie
+encje, więc strona wraca krótsza; a naiwny `COUNT(*)` liczy wiersze po joinie, nie encje.
+Paginator rozwiązuje to zapytaniem po identyfikatorach. Flaga `fetchJoinCollection` mówi mu,
+czy to w ogóle konieczne.
+
+**Dlaczego whitelista mapuje nazwę na wyrażenie DQL, a nie na nazwę kolumny?**
+Bo nazwa z API to kontrakt, a nazwa właściwości to szczegół implementacyjny. Mapowanie
+rozdziela je: można przemianować właściwość bez zmiany API, a `order` nie posłuży do
+sortowania po czymś, czego zasób nie wystawia.
+
+**Co się psuje przy stronicowaniu bez remisu w `ORDER BY`?**
+Kolejność wierszy o równych wartościach nie jest zdefiniowana i może się różnić między
+zapytaniami. Przy `LIMIT/OFFSET` czytelnik zobaczy wtedy jeden wiersz dwa razy, a innego nigdy
+— i nic tego nie zgłosi, bo każda odpowiedź z osobna jest poprawna.
+
+---
+
 ## Django → Symfony
 
 Tabela rośnie z każdym etapem.
@@ -615,3 +781,6 @@ Tabela rośnie z każdym etapem.
 | `models.TextChoices` | backed enum + `enumType:` | `src/Entity/OrganizationRole.php` |
 | `transaction.atomic()` | `EntityManager::wrapInTransaction()` | `src/Domain/Organization/OrganizationManager.php` |
 | `slugify()` + `AutoSlugField` | `AsciiSlugger` + własny generator unikalności | `src/Service/SlugGenerator.php` |
+| DRF `pagination_class` + `PageNumberPagination` | `Doctrine\ORM\Tools\Pagination\Paginator` + `Listing::respond()` | `src/Repository/Listing.php` |
+| DRF `filter_backends` / `ordering_fields` | whitelista nazwa-API → wyrażenie DQL | `src/Controller/Api/*Controller.php` |
+| `request.query_params` + `serializers.Serializer` | `#[MapQueryString]` + `ListQuery` | `src/Dto/Input/ListQuery.php` |

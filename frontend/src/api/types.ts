@@ -74,7 +74,87 @@ export interface AddMemberPayload {
   role: OrganizationRole
 }
 
+export interface League {
+  id: number
+  organization_id: number
+  name: string
+  slug: string
+  description: string
+  created_at: string
+}
+
+export interface Team {
+  id: number
+  organization_id: number
+  name: string
+  short_name: string
+  slug: string
+  created_at: string
+}
+
+export interface Player {
+  id: number
+  organization_id: number
+  first_name: string
+  last_name: string
+  full_name: string
+  date_of_birth: string | null
+  created_at: string
+}
+
+export interface LeaguePayload {
+  name: string
+  slug?: string
+  description: string
+}
+
+export interface TeamPayload {
+  name: string
+  slug?: string
+  short_name: string
+}
+
+export interface PlayerPayload {
+  first_name: string
+  last_name: string
+  date_of_birth?: string | null
+}
+
+/**
+ * Collections are paginated only when asked. Without `page` or `page_size` the endpoint
+ * answers with a bare array, which is what most screens in this application want — and the
+ * type says so, rather than pretending every list is an envelope.
+ */
+export interface ResultPage<T> {
+  count: number
+  page: number
+  page_size: number
+  next: number | null
+  previous: number | null
+  results: T[]
+}
+
+export interface ListParams {
+  search?: string
+  order?: string
+  page?: number
+  pageSize?: number
+}
+
 /** Whether a role may create, edit and delete inside its organization. */
 export function canManage(role: OrganizationRole): boolean {
   return role === 'OWNER' || role === 'ADMIN'
+}
+
+export function listQueryString({ search, order, page, pageSize }: ListParams = {}): string {
+  const params = new URLSearchParams()
+
+  if (search) params.set('search', search)
+  if (order) params.set('order', order)
+  if (page !== undefined) params.set('page', String(page))
+  if (pageSize !== undefined) params.set('page_size', String(pageSize))
+
+  const query = params.toString()
+
+  return query === '' ? '' : `?${query}`
 }

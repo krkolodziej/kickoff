@@ -1,16 +1,17 @@
 import { ChevronLeft, Trash2 } from 'lucide-react'
 import { useState } from 'react'
-import { Link, useNavigate, useParams } from 'react-router-dom'
+import { Link, Outlet, useNavigate, useParams } from 'react-router-dom'
 
 import { ApiError } from '@/api/client'
 import { useDeleteOrganization, useOrganization } from '@/api/organizations'
 import { canManage } from '@/api/types'
+import type { OrganizationContext } from '@/features/organizations/organization-context'
 import { PageHeading } from '@/components/data/PageHeading'
 import { ErrorState, LoadingState } from '@/components/data/States'
+import { Tabs } from '@/components/data/Tabs'
 import { RoleBadge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Dialog } from '@/components/ui/dialog'
-import { MembersPanel } from '@/features/organizations/MembersPanel'
 
 export function OrganizationPage() {
   const { organizationId: rawId } = useParams()
@@ -30,9 +31,9 @@ export function OrganizationPage() {
 
     return (
       <ErrorState
-        // A 404 here means either that the organization does not exist or that the reader
-        // is not in it — and the server deliberately declines to say which. The message has
-        // to be equally true of both, or it gives away what the status code withheld.
+        // A 404 here means either that the organization does not exist or that the reader is
+        // not in it — and the server deliberately declines to say which. The message has to
+        // be equally true of both, or it gives away what the status code withheld.
         message={
           notFound
             ? 'This organization is not available to you.'
@@ -44,9 +45,10 @@ export function OrganizationPage() {
   }
 
   const manageable = canManage(organization.my_role)
+  const base = `/organizations/${organizationId}`
 
   return (
-    <div className="flex flex-col gap-8">
+    <div className="flex flex-col gap-6">
       <div>
         <Link
           to="/dashboard"
@@ -58,7 +60,7 @@ export function OrganizationPage() {
 
         <PageHeading
           title={organization.name}
-          subtitle={`/${organization.slug} · ${organization.member_count} ${organization.member_count === 1 ? 'member' : 'members'}`}
+          subtitle={`/${organization.slug}`}
           actions={
             <>
               <RoleBadge role={organization.my_role} />
@@ -78,7 +80,16 @@ export function OrganizationPage() {
         />
       </div>
 
-      <MembersPanel organizationId={organizationId} canManage={manageable} />
+      <Tabs
+        tabs={[
+          { to: `${base}/leagues`, label: 'Leagues' },
+          { to: `${base}/clubs`, label: 'Clubs' },
+          { to: `${base}/players`, label: 'Players' },
+          { to: `${base}/members`, label: 'Members', count: organization.member_count },
+        ]}
+      />
+
+      <Outlet context={{ organizationId, canManage: manageable } satisfies OrganizationContext} />
 
       <Dialog
         open={confirmingDelete}
