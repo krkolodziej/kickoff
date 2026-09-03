@@ -1,0 +1,19 @@
+# see https://symfony.com/doc/current/reference/configuration/framework.html
+framework:
+    secret: '%env(APP_SECRET)%'
+
+    # The API is stateless; nothing here ever reads or writes a session.
+    # Left enabled only so the dev toolbar keeps working.
+    session: true
+
+    serializer:
+        # The API speaks snake_case, PHP speaks camelCase. One converter, both directions:
+        # `password_confirm` in a request body lands on `$passwordConfirm`, and `$createdAt`
+        # goes out as `created_at`.
+        name_converter: 'serializer.name_converter.camel_case_to_snake_case'
+
+when@test:
+    framework:
+        test: true
+        session:
+            storage_factory_id: session.storage.factory.mock_file

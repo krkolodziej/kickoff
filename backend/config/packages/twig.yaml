@@ -1,0 +1,6 @@
+when@dev: &profiler_only
+    twig:
+        file_name_pattern: '*.twig'
+
+# Twig is present only because the web profiler needs it; the API itself renders nothing.
+when@test: *profiler_only

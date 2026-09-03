@@ -1,0 +1,23 @@
+when@dev:
+    zenstruck_foundry:
+        persistence:
+            # Flush once per create() call rather than after every attribute.
+            flush_once: true
+
+when@test:
+    zenstruck_foundry:
+        persistence:
+            flush_once: true
+        orm:
+            reset:
+                # Build the test schema by running the real migrations rather than by
+                # generating DDL from the mapping. It costs a fraction of a second per run,
+                # and it means a migration that no longer applies fails the test suite
+                # instead of failing a deploy.
+                mode: migrate
+
+    services:
+        App\Tests\Factory\:
+            resource: '%kernel.project_dir%/tests/Factory/'
+            autowire: true
+            autoconfigure: true
