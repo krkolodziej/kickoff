@@ -1,53 +1,115 @@
-import { CalendarDays, Trophy, Users } from 'lucide-react'
+import { ChevronRight, Plus, Users } from 'lucide-react'
+import { useState } from 'react'
+import { Link } from 'react-router-dom'
 
-import { useCurrentUser } from '@/api/auth'
+import { ApiError } from '@/api/client'
+import { useOrganizations } from '@/api/organizations'
+import type { Organization } from '@/api/types'
+import { EmptyState, ErrorState, LoadingState } from '@/components/data/States'
+import { PageHeading } from '@/components/data/PageHeading'
+import { Badge, RoleBadge } from '@/components/ui/badge'
+import { Button } from '@/components/ui/button'
+import { CreateOrganizationDialog } from '@/features/organizations/CreateOrganizationDialog'
 
-const UPCOMING = [
-  {
-    Icon: Users,
-    title: 'Organizations and members',
-    body: 'Workspaces with per-organization roles, so authority is granted where the competition lives rather than globally.',
-  },
-  {
-    Icon: CalendarDays,
-    title: 'Squads and calendars',
-    body: 'Clubs, seasons, registered squads, and a round robin generated in one deterministic pass.',
-  },
-  {
-    Icon: Trophy,
-    title: 'Live matches and standings',
-    body: 'Goals and cards recorded minute by minute, with the table and top scorers derived from those events.',
-  },
-]
+/**
+ * A deterministic mark, so the same organization always looks the same without anyone
+ * having to upload a crest. The hue comes from the name; lightness and chroma stay fixed,
+ * which keeps every mark equally readable in both themes.
+ */
+function OrganizationMark({ name }: { name: string }) {
+  let hash = 0
+
+  for (let index = 0; index < name.length; index += 1) {
+    hash = (hash * 31 + name.charCodeAt(index)) % 360
+  }
+
+  const initials = name
+    .split(' ')
+    .filter(Boolean)
+    .slice(0, 2)
+    .map((word) => word[0])
+    .join('')
+    .toUpperCase()
+
+  return (
+    <span
+      aria-hidden="true"
+      className="grid size-10 shrink-0 place-items-center rounded-[var(--radius-control)] text-[13px] font-bold text-white"
+      style={{ backgroundColor: `oklch(0.55 0.13 ${hash})` }}
+    >
+      {initials}
+    </span>
+  )
+}
+
+function OrganizationCard({ organization }: { organization: Organization }) {
+  return (
+    <Link
+      to={`/organizations/${organization.id}`}
+      className="surface-panel group flex items-center gap-4 p-4 transition-[border-color,box-shadow] duration-150 hover:border-border-strong hover:shadow-[var(--shadow-lift)]"
+    >
+      <OrganizationMark name={organization.name} />
+
+      <div className="min-w-0 flex-1">
+        <p className="truncate text-[15px] font-semibold">{organization.name}</p>
+        <p className="mt-0.5 truncate text-[13px] text-foreground-subtle">/{organization.slug}</p>
+      </div>
+
+      <div className="flex shrink-0 items-center gap-3">
+        <Badge tone="outline">
+          <Users className="mr-1 size-3" />
+          {organization.member_count}
+        </Badge>
+        <RoleBadge role={organization.my_role} />
+        <ChevronRight className="size-4 text-foreground-subtle transition-transform duration-150 group-hover:translate-x-0.5" />
+      </div>
+    </Link>
+  )
+}
 
 export function DashboardPage() {
-  const { user } = useCurrentUser()
+  const [dialogOpen, setDialogOpen] = useState(false)
+  const { data: organizations, isPending, error, refetch } = useOrganizations()
 
   return (
     <div className="flex flex-col gap-8">
-      <div className="border-b border-border pb-6">
-        <p className="text-[13px] font-medium text-primary">Signed in</p>
-        <h1 className="mt-1 text-3xl">
-          {user?.full_name && user.full_name !== '' ? user.full_name : user?.email}
-        </h1>
-        <p className="mt-1.5 text-sm text-foreground-muted">{user?.email}</p>
-      </div>
+      <PageHeading
+        title="Your organizations"
+        subtitle="Every association and club office you belong to."
+        actions={
+          <Button onClick={() => setDialogOpen(true)}>
+            <Plus className="size-4" />
+            New organization
+          </Button>
+        }
+      />
 
-      <section className="flex flex-col gap-4">
-        <h2 className="text-lg">Coming next</h2>
+      {isPending ? <LoadingState label="Loading organizations" /> : null}
 
-        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-          {UPCOMING.map(({ Icon, title, body }) => (
-            <article key={title} className="surface-panel flex flex-col gap-3 p-5">
-              <span className="grid size-9 place-items-center rounded-[var(--radius-control)] bg-primary-wash text-primary">
-                <Icon className="size-4.5" strokeWidth={2} />
-              </span>
-              <h3 className="text-[15px]">{title}</h3>
-              <p className="text-[13px] leading-relaxed text-foreground-muted">{body}</p>
-            </article>
+      {error ? (
+        <ErrorState
+          message={error instanceof ApiError ? error.detail : 'The list could not be loaded.'}
+          onRetry={() => void refetch()}
+        />
+      ) : null}
+
+      {organizations?.length === 0 ? (
+        <EmptyState
+          title="No organizations yet"
+          description="An organization holds your leagues, clubs and players, and decides who may edit them."
+          action={<Button onClick={() => setDialogOpen(true)}>Create your first organization</Button>}
+        />
+      ) : null}
+
+      {organizations && organizations.length > 0 ? (
+        <div className="grid gap-3 sm:grid-cols-2">
+          {organizations.map((organization) => (
+            <OrganizationCard key={organization.id} organization={organization} />
           ))}
         </div>
-      </section>
+      ) : null}
+
+      <CreateOrganizationDialog open={dialogOpen} onClose={() => setDialogOpen(false)} />
     </div>
   )
 }

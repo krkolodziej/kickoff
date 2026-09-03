@@ -1,0 +1,170 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\Tests\Api;
+
+use App\Entity\OrganizationRole;
+use App\Tests\Factory\OrganizationFactory;
+use App\Tests\Factory\OrganizationMembershipFactory;
+use App\Tests\Factory\UserFactory;
+use PHPUnit\Framework\Attributes\DataProvider;
+use Symfony\Component\HttpFoundation\Response;
+
+final class OrganizationApiTest extends ApiTestCase
+{
+    public function testCreatingAnOrganizationMakesTheCreatorItsOwner(): void
+    {
+        $user = UserFactory::createOne();
+        $token = $this->signIn($user);
+
+        $this->request('POST', '/api/v1/organizations', ['name' => 'Podkarpacka Liga Amatorska'], $token);
+
+        self::assertResponseStatusCodeSame(Response::HTTP_CREATED);
+
+        $body = $this->json();
+        self::assertSame('OWNER', $body['my_role']);
+        self::assertSame(1, $body['member_count']);
+        self::assertSame('podkarpacka-liga-amatorska', $body['slug'], 'The slug is derived from the name.');
+    }
+
+    public function testSlugsAreTransliteratedAndMadeUnique(): void
+    {
+        $user = UserFactory::createOne();
+        $token = $this->signIn($user);
+
+        $this->request('POST', '/api/v1/organizations', ['name' => 'Łódzki Związek Piłki'], $token);
+        self::assertSame('lodzki-zwiazek-pilki', $this->json()['slug']);
+
+        // A second organization may legitimately share a name. Rejecting the request would
+        // mean an error about a field the user never filled in.
+        $this->request('POST', '/api/v1/organizations', ['name' => 'Łódzki Związek Piłki'], $token);
+        self::assertSame('lodzki-zwiazek-pilki-2', $this->json()['slug']);
+    }
+
+    public function testTheListShowsOnlyOrganizationsYouBelongTo(): void
+    {
+        $user = UserFactory::createOne();
+        OrganizationFactory::createOne(['name' => 'Mine', 'createdBy' => $user]);
+        OrganizationFactory::createOne(['name' => 'Someone else\'s']);
+
+        $this->request('GET', '/api/v1/organizations', null, $this->signIn($user));
+
+        self::assertResponseIsSuccessful();
+
+        $names = array_column($this->jsonList(), 'name');
+        self::assertSame(['Mine'], $names);
+    }
+
+    /**
+     * The rule this whole stage exists for.
+     *
+     * A non-member must not be able to tell an organization that exists from one that does
+     * not. Answering 403 would confirm the id is real, which is information the caller has
+     * not earned — and it does so on every verb, not just the readable one.
+     */
+    /**
+     * @param array<string, mixed>|null $payload
+     */
+    #[DataProvider('everyVerbOnOneOrganization')]
+    public function testANonMemberCannotTellTheOrganizationExists(string $method, ?array $payload): void
+    {
+        $organization = OrganizationFactory::createOne();
+        $outsider = UserFactory::createOne();
+
+        $this->request($method, '/api/v1/organizations/'.$organization->getId(), $payload, $this->signIn($outsider));
+
+        self::assertResponseStatusCodeSame(Response::HTTP_NOT_FOUND);
+        self::assertSame('not_found', $this->json()['code']);
+        self::assertNotSame('permission_denied', $this->json()['code']);
+    }
+
+    /**
+     * @return iterable<string, array{string, array<string, mixed>|null}>
+     */
+    public static function everyVerbOnOneOrganization(): iterable
+    {
+        yield 'read' => ['GET', null];
+        yield 'update' => ['PATCH', ['name' => 'Renamed']];
+        yield 'delete' => ['DELETE', null];
+    }
+
+    public function testAMemberMayReadButNotWrite(): void
+    {
+        $organization = OrganizationFactory::createOne();
+        $member = UserFactory::createOne();
+        OrganizationMembershipFactory::createOne([
+            'organization' => $organization,
+            'user' => $member,
+            'role' => OrganizationRole::Member,
+        ]);
+
+        $token = $this->signIn($member);
+
+        $this->request('GET', '/api/v1/organizations/'.$organization->getId(), null, $token);
+        self::assertResponseIsSuccessful();
+        self::assertSame('MEMBER', $this->json()['my_role']);
+
+        // Existence is established, so the honest answer here is 403, not 404.
+        $this->request('PATCH', '/api/v1/organizations/'.$organization->getId(), ['name' => 'Renamed'], $token);
+        self::assertResponseStatusCodeSame(Response::HTTP_FORBIDDEN);
+        self::assertSame('permission_denied', $this->json()['code']);
+    }
+
+    public function testAnAdminMayRenameButOnlyTheOwnerMayDelete(): void
+    {
+        $organization = OrganizationFactory::createOne();
+        $admin = UserFactory::createOne();
+        OrganizationMembershipFactory::createOne([
+            'organization' => $organization,
+            'user' => $admin,
+            'role' => OrganizationRole::Admin,
+        ]);
+
+        $token = $this->signIn($admin);
+        $uri = '/api/v1/organizations/'.$organization->getId();
+
+        $this->request('PATCH', $uri, ['name' => 'Renamed'], $token);
+        self::assertResponseIsSuccessful();
+        self::assertSame('Renamed', $this->json()['name']);
+
+        $this->request('DELETE', $uri, null, $token);
+        self::assertResponseStatusCodeSame(Response::HTTP_FORBIDDEN);
+    }
+
+    public function testTheOwnerCanDeleteTheOrganization(): void
+    {
+        $owner = UserFactory::createOne();
+        $organization = OrganizationFactory::createOne(['createdBy' => $owner]);
+
+        $this->request('DELETE', '/api/v1/organizations/'.$organization->getId(), null, $this->signIn($owner));
+
+        self::assertResponseStatusCodeSame(Response::HTTP_NO_CONTENT);
+        OrganizationFactory::assert()->count(0, ['id' => $organization->getId()]);
+    }
+
+    public function testAnonymousRequestsAreRejected(): void
+    {
+        $organization = OrganizationFactory::createOne();
+
+        $this->request('GET', '/api/v1/organizations/'.$organization->getId());
+
+        self::assertResponseStatusCodeSame(Response::HTTP_UNAUTHORIZED);
+    }
+
+    public function testRenamingValidatesTheSlugFormat(): void
+    {
+        $owner = UserFactory::createOne();
+        $organization = OrganizationFactory::createOne(['createdBy' => $owner]);
+
+        $this->request(
+            'PATCH',
+            '/api/v1/organizations/'.$organization->getId(),
+            ['name' => 'Fine', 'slug' => 'Not A Slug'],
+            $this->signIn($owner),
+        );
+
+        self::assertResponseStatusCodeSame(Response::HTTP_UNPROCESSABLE_ENTITY);
+        self::assertArrayHasKey('slug', $this->json()['fields']);
+    }
+}

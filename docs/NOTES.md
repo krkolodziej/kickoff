@@ -22,6 +22,15 @@ dokumentu rośnie z każdym etapem.
   - [1.8 Testy](#18-testy)
   - [1.9 Pułapki, na które realnie wpadłem](#19-pułapki-na-które-realnie-wpadłem)
   - [Pytania na rozmowę](#pytania-na-rozmowę--stage-1)
+- [Stage 2 — organizacje, role per-org, scope resolver](#stage-2--organizacje-role-per-org-scope-resolver)
+  - [2.1 Rola nie jest rolą Symfony](#21-rola-nie-jest-rolą-symfony)
+  - [2.2 Scope i ValueResolver](#22-scope-i-valueresolver)
+  - [2.3 404 zamiast 403](#23-404-zamiast-403)
+  - [2.4 Voter, który nie odpytuje bazy](#24-voter-który-nie-odpytuje-bazy)
+  - [2.5 Niezmienniki właściciela](#25-niezmienniki-właściciela)
+  - [2.6 Slug: sufiks zamiast odmowy](#26-slug-sufiks-zamiast-odmowy)
+  - [2.7 Pułapki Stage 2](#27-pułapki-stage-2)
+  - [Pytania na rozmowę](#pytania-na-rozmowę--stage-2)
 - [Django → Symfony](#django--symfony)
 
 ---
@@ -388,6 +397,188 @@ zwraca jedną współdzieloną obietnicę.
 
 ---
 
+## Stage 2 — organizacje, role per-org, scope resolver
+
+### 2.1 Rola nie jest rolą Symfony
+
+`backend/src/Entity/OrganizationRole.php`
+
+Odruch mówi: „admin? wrzuć `ROLE_ADMIN` do `User::getRoles()`". To by znaczyło **administrator
+wszystkiego** — a w tej aplikacji ta sama osoba może być właścicielem jednej ligi i biernym
+obserwatorem w drugiej. Dlatego rola siedzi na wierszu `organization_memberships`, a
+`User::getRoles()` zwraca dla każdego to samo `['ROLE_USER']`.
+
+Enum jest **backed** (`: string`) i zmapowany przez `enumType:`, więc w bazie widać `OWNER`,
+a nie liczbę, której nikt nie zinterpretuje z klienta SQL.
+
+`OrganizationRole::assignable()` zwraca `[Admin, Member]` — i to jest **jedyna** lista
+dozwolonych ról w API. `AddMemberRequest` i `UpdateMemberRoleRequest` używają jej przez
+`#[Assert\Choice(callback: ...)]`, więc nie ma drugiego miejsca, które trzeba trzymać w
+zgodzie. Konsekwencja: `"role": "OWNER"` w ciele żądania to błąd walidacji, a nie sposób na
+zrobienie drugiego właściciela.
+
+### 2.2 Scope i ValueResolver
+
+To jest sedno całego etapu.
+
+Trasy są głęboko zagnieżdżone (`/organizations/{o}/leagues/{l}/seasons/{s}/…` od Stage 3).
+Naiwne podejście to w każdym kontrolerze: pobierz organizację, sprawdź membership, pobierz
+ligę, sprawdź czy należy do organizacji… — i wystarczy raz o czymś zapomnieć.
+
+Zamiast tego jest `ScopeInterface` (`backend/src/Scope/ScopeInterface.php`) i fabryka, która
+buduje go **jednym zapytaniem joinującym membership**
+(`OrganizationMembershipRepository::findForUserAndOrganization`). Brak wiersza →
+`NotFoundHttpException`.
+
+`backend/src/Http/ValueResolver/ScopeValueResolver.php` wstrzykuje to do kontrolera po typie:
+
+```php
+#[IsGranted(OrganizationVoter::MANAGE, subject: 'scope')]
+public function update(OrganizationScope $scope, #[MapRequestPayload] OrganizationRequest $payload): JsonResponse
+```
+
+To jest następca `ParamConvertera` z SensioFrameworkExtraBundle — i lepszy, bo zamiast
+„pobierz encję o tym id" odpowiada na pytanie „rozwiąż całą ścieżkę w obiekt, do którego
+wołający ma prawo". **Kontroler, który trzyma scope, trzyma dowód uprawnienia**: nie ma
+zapytania do zapomnienia, bo nie da się zdobyć tego obiektu inaczej.
+
+Jedno rozwiązanie załatwia cztery rzeczy naraz:
+
+1. zagnieżdżenie tras — `{organizationId}` nie pojawia się w żadnej sygnaturze kontrolera,
+2. regułę 404 zamiast 403,
+3. spójność łańcucha (od Stage 3: nie wejdziesz w sezon 5 przez ligę 9),
+4. N+1 na rodzicach — organizacja przyjeżdża `addSelect`em razem z membershipem.
+
+Rejestracja: żadna. `ValueResolverInterface` jest autokonfigurowane, wystarczy że klasa leży
+w `src/`.
+
+### 2.3 404 zamiast 403
+
+Reguła: **obcy dostaje 404, nigdy 403.**
+
+403 znaczy „to istnieje, ale nie dla ciebie" — czyli potwierdza istnienie zasobu. Kto zgadnie
+`/organizations/1`, `/2`, `/3` i będzie rozróżniał 403 od 404, ten zmapuje rozmiar systemu i
+ważność identyfikatorów, nie mając w nim żadnego konta.
+
+W `ScopeFactory` nie ma gałęzi „organizacja istnieje, ale nie jesteś członkiem" — nie da się
+takiej napisać, bo zapytanie już zawiera join membershipu. Brak wiersza znaczy jedno i to
+samo.
+
+Pilnuje tego test z `#[DataProvider]` na **wszystkich trzech czasownikach**
+(`backend/tests/Api/OrganizationApiTest.php`), bo najłatwiej przeoczyć to na PATCH albo
+DELETE, gdzie odruchowo pisze się „a, tu przecież i tak trzeba 403".
+
+Frontend musi mówić to samo. `OrganizationPage` na 404 pokazuje „This organization is not
+available to you" — zdanie **prawdziwe zarówno gdy zasób nie istnieje, jak i gdy istnieje
+cudzy**. „Nie masz dostępu do tej organizacji" oddałoby dokładnie tę informację, którą kod
+statusu zataił.
+
+### 2.4 Voter, który nie odpytuje bazy
+
+`backend/src/Security/Voter/OrganizationVoter.php`
+
+Zdanie do zapamiętania: **scope decyduje, czy zasób dla ciebie istnieje; voter decyduje, co ci
+wolno z zasobem, który istnieje.**
+
+- Samo scopowanie w repozytorium nie wyrazi „member może czytać, ale nie pisać".
+- Sam voter nie wyrazi „ten zasób jest dla ciebie niewidoczny" bez wyciekania 403.
+
+Potrzebne są oba i odpowiadają na różne pytania.
+
+Voter głosuje na `ScopeInterface`, w którym rola **już jest wczytana**, więc autoryzacja
+kosztuje zero dodatkowych zapytań. To praktyczna różnica wobec typowego votera, który dostaje
+encję i dopiero szuka uprawnień.
+
+`ORG_VIEW` zwraca zawsze `true` — i to nie jest dziura. Dotarcie do tej linii oznacza, że
+zapytanie membershipowe zwróciło wiersz; dowód już się odbył.
+
+### 2.5 Niezmienniki właściciela
+
+Trzy, wszystkie wymuszone po stronie serwera:
+
+1. **Organizacja i własność powstają razem albo wcale** — `OrganizationManager::create()`
+   w `wrapInTransaction`. Organizacja bez właściciela to wiersz, nad którym nikt na świecie
+   nie ma władzy: nie da się nim zarządzać ani go usunąć, zostaje tylko migracja.
+2. **Członkostwa właściciela nie da się zmienić ani usunąć** przez API →
+   `OwnerMembershipIsProtectedException`, 403, kod `owner_membership_protected`. 403, nie 409,
+   bo to nie kwestia bieżącego stanu danych — żadna sekwencja żądań tego nie odblokuje.
+   Strażnik jest w **jednym** miejscu (`guardOwner`), bo dwa oddzielne sprawdzenia w dwóch
+   kontrolerach to sposób na to, żeby jedno kiedyś wypadło.
+3. **API nie wyprodukuje drugiego właściciela** — patrz `assignable()` w 2.1.
+
+Osobno: `findOneInOrganization()` bierze organizację **do zapytania**, a nie porównuje jej po
+pobraniu. Id członkostwa jest unikalne globalnie, więc gdyby porównanie zostało kiedyś
+pominięte, admin jednej organizacji edytowałby skład innej, zgadując identyfikatory.
+
+### 2.6 Slug: sufiks zamiast odmowy
+
+`backend/src/Service/SlugGenerator.php`
+
+Dwie organizacje mogą się legalnie nazywać tak samo. Skoro slug jest **wyprowadzany z nazwy**,
+odmowa zapisu oznaczałaby błąd przy polu, którego użytkownik w ogóle nie wypełniał. Dlatego
+`podkarpacka-liga-amatorska`, a przy kolizji `-2`, `-3`.
+
+Detal, który gryzie dopiero przy danych: `new AsciiSlugger()` **bez locale** używa ogólnej
+tablicy transliteracji i polskie nazwy wychodzą pokaleczone. `new AsciiSlugger('pl')` daje
+`Łódzki Związek Piłki` → `lodzki-zwiazek-pilki`. Jest na to test.
+
+Slug ma `VARCHAR(64)`, nie 255. Pod utf8mb4 InnoDB ma limit 3072 bajtów na indeks, a od
+Stage 3 slugi wchodzą w złożone unikalne indeksy razem z kluczem obcym.
+
+### 2.7 Pułapki Stage 2
+
+**`$code` w wyjątku.** `class ConflictException` z `private readonly string $code` to **fatal
+error kompilacji**: `\Exception` ma już własne `$code`, a przedeklarowanie niereadonly
+property jako readonly jest zabronione. Stąd `$errorCode`.
+
+**Enum przy hydratacji skalarnej.** `->select('m.role AS role')` **nie** zwraca stringa —
+Doctrine stosuje `enumType` kolumny także do selecta skalarnego, więc przyjeżdża instancja
+`OrganizationRole`. `(string) $row['role']` daje „Object of class … could not be converted to
+string" i 500.
+
+**`cascade: ['persist']` na kolekcji.** Bez tego membership utworzony w konstruktorze albo w
+fabryce testowej nie trafia do bazy, bo nikt go nie persystuje jawnie.
+
+**`single_line_throw` z presetu `@Symfony`** zwija każdy `throw` do jednej linii — konstruowany
+wyjątek z pięcioma argumentami staje się linią na 200 znaków. Wyłączone w
+`.php-cs-fixer.dist.php`.
+
+**Tailwind preflight kontra natywny `<dialog>`.** Modalny `<dialog>` jest wyśrodkowany przez
+własny styl przeglądarki: `inset: 0; margin: auto`. Preflight zeruje **wszystkie** marginesy,
+więc dialog po cichu przykleja się do lewego górnego rogu. Lekarstwo to jedna klasa `m-auto`
+(`frontend/src/components/ui/dialog.tsx`). Poza tym `showModal()` daje za darmo pułapkę
+fokusa, `inert` na tle, warstwę top-layer i obsługę Escape — czyli wszystko to, co ręcznie
+robione modale robią źle.
+
+**`setState` w efekcie.** Pierwsza wersja dialogu czyściła formularz efektem reagującym na
+`open`. Lint słusznie zaprotestował: to dodatkowy render dla czegoś, o czym zdarzenie
+zamknięcia i tak wie. Teraz czyszczenie dzieje się w `close()`.
+
+### Pytania na rozmowę — Stage 2
+
+**Dlaczego 403 dla obcej organizacji to błąd, a nie uprzejmość?**
+Bo 403 potwierdza istnienie zasobu. Iterując po identyfikatorach i rozróżniając 403 od 404
+można zmapować system, nie mając w nim konta. 404 dla wszystkiego, czego nie widzisz, nie
+zdradza nic.
+
+**Czym różni się Voter od `access_control`?**
+`access_control` działa na ścieżce URL i nie wie nic o obiekcie. Voter dostaje **podmiot** i
+odpowiada na pytanie zależne od danych („czy ta osoba może edytować *tę* organizację").
+Tutaj `access_control` mówi tylko „pod `/api` trzeba być zalogowanym", a całą resztę
+rozstrzygają scope i voter.
+
+**Dlaczego rola nie jest w tokenie JWT?**
+Bo jest per-organizacja, a token jest jeden na sesję. Wrzucenie tam ról znaczyłoby ponowne
+wydawanie tokenu przy każdej zmianie uprawnień — a do tego czasu odwołany admin dalej byłby
+adminem, bo access tokenu nie da się unieważnić.
+
+**Po co `wrapInTransaction` przy tworzeniu organizacji?**
+Bo organizacja i członkostwo właściciela muszą powstać razem albo wcale. Sam INSERT
+organizacji, po którym coś pęknie, zostawia wiersz, nad którym nikt nie ma władzy: nie da się
+go edytować ani usunąć przez API.
+
+---
+
 ## Django → Symfony
 
 Tabela rośnie z każdym etapem.
@@ -402,3 +593,9 @@ Tabela rośnie z każdym etapem.
 | `custom_exception_handler` | listener na `kernel.exception` | `src/EventSubscriber/ApiExceptionSubscriber.php` |
 | `manage.py makemigrations` | `doctrine:migrations:diff` | `migrations/` |
 | `factory_boy` | `zenstruck/foundry` | `tests/Factory/` |
+| `get_object_or_404` + miksin scopujący queryset | `ValueResolverInterface` budujący scope | `src/Http/ValueResolver/ScopeValueResolver.php` |
+| DRF `permission_classes` / `has_object_permission` | `Voter` + `#[IsGranted(subject:)]` | `src/Security/Voter/OrganizationVoter.php` |
+| `Model.objects.filter(memberships__user=request.user)` | join membershipu w repozytorium | `src/Repository/OrganizationMembershipRepository.php` |
+| `models.TextChoices` | backed enum + `enumType:` | `src/Entity/OrganizationRole.php` |
+| `transaction.atomic()` | `EntityManager::wrapInTransaction()` | `src/Domain/Organization/OrganizationManager.php` |
+| `slugify()` + `AutoSlugField` | `AsciiSlugger` + własny generator unikalności | `src/Service/SlugGenerator.php` |

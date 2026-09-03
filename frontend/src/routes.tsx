@@ -6,6 +6,7 @@ import { AuthLayout } from '@/features/auth/AuthLayout'
 import { SignInPage } from '@/features/auth/SignInPage'
 import { SignUpPage } from '@/features/auth/SignUpPage'
 import { DashboardPage } from '@/features/dashboard/DashboardPage'
+import { OrganizationPage } from '@/features/organizations/OrganizationPage'
 
 export const router = createBrowserRouter([
   {
@@ -25,7 +26,10 @@ export const router = createBrowserRouter([
     children: [
       {
         element: <AppShell />,
-        children: [{ path: '/dashboard', element: <DashboardPage /> }],
+        children: [
+          { path: '/dashboard', element: <DashboardPage /> },
+          { path: '/organizations/:organizationId', element: <OrganizationPage /> },
+        ],
       },
     ],
   },

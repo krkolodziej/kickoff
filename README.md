@@ -159,6 +159,27 @@ Base path `/api/v1`. Everything is JSON.
 | `POST` | `/token/refresh` | refresh cookie | Exchange the refresh cookie for a new access token |
 | `GET` | `/auth/me` | bearer | The signed-in account |
 | `POST` | `/auth/logout` | bearer | Revoke every refresh token and clear the cookie |
+| `GET` | `/organizations` | bearer | The organizations you belong to, with your role in each |
+| `POST` | `/organizations` | bearer | Create one; you become its owner |
+| `GET` | `/organizations/{id}` | member | One organization |
+| `PATCH` | `/organizations/{id}` | admin | Rename it |
+| `DELETE` | `/organizations/{id}` | owner | Delete it, and everything inside |
+| `GET` | `/organizations/{id}/members` | member | The roster |
+| `POST` | `/organizations/{id}/members` | admin | Add an existing account by email |
+| `PATCH` | `/organizations/{id}/members/{membershipId}` | admin | Change someone's role |
+| `DELETE` | `/organizations/{id}/members/{membershipId}` | admin | Remove them |
+
+Authority is granted **per organization**, not globally: the same person can own one
+competition and merely read another. "member", "admin" and "owner" above are roles inside the
+organization named in the path, and they are checked by a voter — the account itself carries
+no privileges.
+
+### Not yours and not there are the same answer
+
+An organization you are not a member of answers **404, never 403** — on every verb. A 403
+would confirm the id is real, and iterating over ids while telling the two apart would map
+the whole system to someone with no account in it. Every scoped query joins the caller's
+membership, so there is no code path to a row outside it and no check anyone can forget.
 
 ### Errors
 
@@ -187,6 +208,8 @@ the request body — so a client can apply them to its form without a lookup tab
 | `permission_denied` | 403 | Authenticated, not allowed |
 | `not_found` | 404 | |
 | `conflict` | 409 | Well-formed, but the current state forbids it |
+| `already_a_member` | 409 | That account is already in the organization |
+| `owner_membership_protected` | 403 | Ownership is not editable through the members API |
 
 ### Tokens
 
@@ -207,7 +230,7 @@ straight back out.
 | | | |
 | --- | --- | --- |
 | 1 | Foundation: accounts, JWT, the error envelope, the design system | ✅ |
-| 2 | Organizations and per-organization roles | |
+| 2 | Organizations and per-organization roles | ✅ |
 | 3 | Leagues, seasons, clubs, players, squads | |
 | 4 | Round-robin fixture generation | |
 | 5 | Matches, the state machine, goals and cards | |
