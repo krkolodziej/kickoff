@@ -6,6 +6,10 @@ import { AuthLayout } from '@/features/auth/AuthLayout'
 import { SignInPage } from '@/features/auth/SignInPage'
 import { SignUpPage } from '@/features/auth/SignUpPage'
 import { LeaguePage } from '@/features/competitions/LeaguePage'
+import {
+  FixturesSection,
+  SquadsSection,
+} from '@/features/competitions/season-sections'
 import { SeasonPage } from '@/features/competitions/SeasonPage'
 import { DashboardPage } from '@/features/dashboard/DashboardPage'
 import { OrganizationPage } from '@/features/organizations/OrganizationPage'
@@ -42,6 +46,11 @@ export const router = createBrowserRouter([
           {
             path: '/organizations/:organizationId/leagues/:leagueId/seasons/:seasonId',
             element: <SeasonPage />,
+            children: [
+              { index: true, element: <Navigate to="squads" replace /> },
+              { path: 'squads', element: <SquadsSection /> },
+              { path: 'fixtures', element: <FixturesSection /> },
+            ],
           },
           {
             path: '/organizations/:organizationId',

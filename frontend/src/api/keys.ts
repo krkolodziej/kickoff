@@ -42,4 +42,7 @@ export const qk = {
 
   roster: (organizationId: number, leagueId: number, seasonId: number, seasonTeamId: number) =>
     [...qk.seasonTeams(organizationId, leagueId, seasonId), seasonTeamId, 'roster'] as const,
+
+  fixtures: (organizationId: number, leagueId: number, seasonId: number) =>
+    [...qk.season(organizationId, leagueId, seasonId), 'fixtures'] as const,
 } as const

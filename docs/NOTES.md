@@ -50,6 +50,14 @@ dokumentu rośnie z każdym etapem.
   - [3b.7 Data to nie moment](#3b7-data-to-nie-moment)
   - [3b.8 Pułapki Stage 3b](#3b8-pułapki-stage-3b)
   - [Pytania na rozmowę](#pytania-na-rozmowę--stage-3b)
+- [Stage 4 — generowanie terminarza](#stage-4--generowanie-terminarza)
+  - [4.1 Algorytm bez frameworka](#41-algorytm-bez-frameworka)
+  - [4.2 Metoda okręgowa](#42-metoda-okręgowa)
+  - [4.3 Błąd, który znalazł test](#43-błąd-który-znalazł-test)
+  - [4.4 Blokada wiersza, nie sprawdzenie](#44-blokada-wiersza-nie-sprawdzenie)
+  - [4.5 Determinizm](#45-determinizm)
+  - [4.6 Pułapki Stage 4](#46-pułapki-stage-4)
+  - [Pytania na rozmowę](#pytania-na-rozmowę--stage-4)
 - [Django → Symfony](#django--symfony)
 
 ---
@@ -942,6 +950,172 @@ to na dzień wcześniejszy, a porównania dat zaczynają zależeć od tego, kto 
 
 ---
 
+## Stage 4 — generowanie terminarza
+
+### 4.1 Algorytm bez frameworka
+
+`backend/src/Domain/Fixture/RoundRobinScheduler.php`
+
+Klasa nie zna Doctrine, encji ani kontenera. Na wejściu `list<int>` identyfikatorów, na wyjściu
+`list<FixturePairing>` — zwykłe liczby.
+
+To nie jest czystość dla czystości. Błąd w terminarzu objawia się jako „czternasta kolejka
+wygląda dziwnie" trzy tygodnie później, a jedyny sposób na pewność to przetestować algorytm
+**wyczerpująco**: każda para spotyka się raz, nikt nie gra dwa razy w kolejce, pauzy rozkładają
+się równo, gospodarze się równoważą. Taki zestaw testów musi być natychmiastowy — i jest, o ile
+nic w środku nie dotyka bazy.
+
+Liczby na dowód: **43 testy, 664 asercje, 28 ms**. Cała reszta suite'u (139 testów) idzie
+5 sekund, bo tam jest już MariaDB.
+
+Podział odpowiedzialności:
+
+| | `RoundRobinScheduler` | `FixtureGenerator` |
+| --- | --- | --- |
+| wie o | liczbach | encjach, transakcjach, blokadach |
+| testowany | `TestCase`, bez kernela | `WebTestCase`, przez HTTP |
+| co sprawdza test | arytmetykę | trwałość i 409 |
+
+### 4.2 Metoda okręgowa
+
+Jeden klub **przypięty**, pozostałe rotują wokół niego. Przy `n` klubach jest `n-1` kolejek, a
+w każdej przypięty gra z tym, kto wrotował na pierwszą pozycję, a reszta paruje się od końców
+do środka:
+
+```php
+if (0 === $index) {
+    return [$slots[$pinned], $slots[$round % $rotating]];
+}
+
+return [
+    $slots[($round + $index) % $rotating],
+    $slots[($round - $index + $rotating) % $rotating],
+];
+```
+
+Nieparzysta liczba klubów: dokładany jest **placeholder**, z którym nikt nie gra. Klub
+wylosowany przeciw niemu po prostu pauzuje. Kolejek nadal jest `n`, bo każdy musi mieć wolny
+tydzień — i test sprawdza, że każdy ma go **dokładnie raz**, inaczej ktoś zagrałby mniej
+meczów i tabela byłaby kłamstwem.
+
+### 4.3 Błąd, który znalazł test
+
+Najciekawsza rzecz w tym etapie.
+
+Napisałem oczywistą regułę stron: `swap = (round + index) % 2`. Wygląda rozsądnie — naprzemienna,
+zależna od kolejki i pozycji. Test `testHomeAndAwayAreShared` od razu wywalił:
+
+```
+Club 1 hosts too rarely.
+Failed asserting that 0 is equal to 4 or is greater than 4.
+```
+
+**Klub o najmniejszym identyfikatorze nie grał u siebie ani razu w całym sezonie.** Powód: po
+posortowaniu ten klub siedzi na `$slots[0]`, a obie pozycje, na których może się znaleźć, wypadają
+na tej samej parzystości — więc reguła zawsze stawiała go po tej samej stronie.
+
+I nic innego w terminarzu nie wyglądało źle: 66 meczów, 11 kolejek, każda para raz, nikt dwa razy
+w kolejce. Bez asercji na rozkład gospodarzy to by przeszło.
+
+Zamiast zgadywać poprawkę, **zmierzyłem** sześć kandydatów dla 4–20 klubów i wybrałem najlepszego:
+
+| Reguła | najgorsze odchylenie | zakres meczów u siebie |
+| --- | --- | --- |
+| `(round+i) % 2` | 9,5 | **0**..18 |
+| `round % 2` | 1,5 | 0..2 |
+| `i % 2` | 9,5 | 9..19 |
+| **`i==0 ? round%2 : i%2`** | **0,5** | idealnie |
+
+Wybrana reguła daje każdemu klubowi pół meczu od równego podziału: 5 albo 6 z 11 przy dwunastu
+klubach (11 nie dzieli się na pół), a w dwumeczu **dokładnie 11 z 22** — potwierdzone też na
+prawdziwych danych przez API.
+
+Test został po tym **zacieśniony**: asercja to teraz `abs(home - played/2) <= 0.5` dla każdego
+klubu i każdej liczby klubów od 2 do 16. Luźny próg („między 4 a 7") przepuściłby połowę błędów.
+
+Uzasadnienie reguły, już po fakcie: przypięta para alternuje po kolejce, bo przypięty klub jest w
+każdej kolejce i nic innego się dla niego nie zmienia; reszta alternuje po **pozycji w kolejce**,
+bo klub obraca się przez wszystkie pozycje.
+
+### 4.4 Blokada wiersza, nie sprawdzenie
+
+`FixtureGenerator::generate()`
+
+```php
+$locked = $this->entityManager->find(Season::class, $season->getId(), LockMode::PESSIMISTIC_WRITE);
+```
+
+Naiwna wersja to `if ($fixtures->seasonHasFixtures($season)) { throw ... }`. Dwóch operatorów
+klikających „Generuj" w tej samej sekundzie **obaj** nie znajdą wtedy meczów, obaj zbudują
+terminarz i obaj zaczną wstawiać. Unikalny indeks odrzuci drugi wstaw — ale **w połowie**,
+zostawiając pół terminarza i pięćsetkę.
+
+`SELECT … FOR UPDATE` na wierszu sezonu sprawia, że drugie żądanie **czeka**, po zwolnieniu blokady
+widzi mecze zapisane przez pierwsze i odmawia czysto: 409 `fixtures_already_generated`.
+
+Warto wiedzieć, co ta blokada blokuje: **wiersz sezonu**, nie tabelę meczów. Wystarcza, bo każdy
+generator najpierw sięga po ten sam wiersz — to jest wzorzec „zablokuj rodzica, żeby serializować
+zapisy do dzieci".
+
+Kasowanie terminarza jest **osobnym, świadomym** żądaniem (`DELETE .../fixtures`), i właśnie
+dlatego `generate` może odmawiać zamiast po cichu podmieniać. Regeneracja to dwa kliknięcia, z
+czego jedno z ostrzeżeniem.
+
+### 4.5 Determinizm
+
+`sort($teamIds)` na wejściu. Ten sam zestaw klubów **zawsze** daje ten sam terminarz, niezależnie
+od kolejności, w jakiej wiersze wróciły z bazy.
+
+Generator, którego wyjście zależy od kolejności wiersza w wyniku, jest niemożliwy do
+zrozumienia („dlaczego dziś wyszło inaczej?") i niemożliwy do przetestowania dwa razy. Jest na to
+osobny test, który porównuje terminarz dla `[1..6]` i dla `[5,3,6,1,4,2]`.
+
+### 4.6 Pułapki Stage 4
+
+**`array_values()` po `sort()`** — `sort()` przenumerowuje klucze w miejscu, więc `array_values`
+nic nie robi. PHPStan to widzi.
+
+**PHPStan zna PHPUnit.** `assertSame(count($x), count(array_unique($x)))` dostało uwagę, żeby użyć
+`assertCount` — dzięki `phpstan/phpstan-phpunit`. Drobiazg, ale to ta klasa podpowiedzi, dla której
+warto mieć rozszerzenia PHPStana.
+
+**`hour: '2-digit'` w `Intl.DateTimeFormat`** renderuje w locale 12-godzinnym `03:00 PM`. Wiodące
+zero na zegarze 12-godzinnym czyta się jak błąd. `hour: 'numeric'` daje `3:00 PM` albo `15:00`,
+zależnie od czytelnika — format zostaje jego, nie nasz.
+
+**Podmiana `node_modules` pod działającym dev serverem.** W trakcie tego etapu ktoś uruchomił w
+`frontend/` `pnpm install`, co przebudowało `node_modules` na układ pnpm i zostawiło
+`pnpm-lock.yaml` obok zacommitowanego `package-lock.json`. Objawy były mylące: `tsc` nie mógł
+znaleźć własnego binarium, a po naprawie (`npm ci`) Vite dalej podawał **nieświeże moduły** —
+`does not provide an export named 'SeasonPage'` dla pliku, który ten eksport ma. Lekarstwo:
+restart dev servera i `rm -rf node_modules/.vite`. Morał: dwa lockfile'e w jednym projekcie to
+nie kwestia gustu, a błąd konfiguracji — CI używa `npm ci`, więc projekt jest npm-owy.
+
+### Pytania na rozmowę — Stage 4
+
+**Dlaczego algorytm nie zna Doctrine?**
+Bo błąd w terminarzu objawia się tygodnie później i jedyna obrona to test wyczerpujący, a taki
+test musi być natychmiastowy. 43 testy w 28 ms kontra 5 sekund z bazą — przy tej pierwszej
+liczbie testuje się każdą liczbę klubów od 2 do 16, przy drugiej wybiera się jedną.
+
+**Po co `SELECT … FOR UPDATE`, skoro jest unikalny indeks?**
+Indeks zapewnia poprawność, ale w najgorszym momencie: odrzuca *w trakcie* wstawiania, zostawiając
+pół terminarza i 500. Blokada zamienia wyścig w kolejkę — drugie żądanie czeka, widzi wynik
+pierwszego i odmawia czysto 409-ką.
+
+**Czemu `generate` odmawia, zamiast nadpisać?**
+Bo wyniki mogą już wisieć na meczach z pierwszego terminarza. Nadpisanie zostawiłoby je wskazujące
+na nieistniejące spotkania. Kasowanie jest osobnym żądaniem z ostrzeżeniem, więc regeneracja jest
+możliwa, ale nigdy przypadkowa.
+
+**Skąd wiadomo, że gospodarze rozkładają się równo?**
+Z pomiaru, nie z rozumowania. Sześć kandydatów na regułę stron, każdy sprawdzony dla 4–20 klubów;
+pięć z nich zostawiało jakiś klub na zero meczów u siebie. Test asertuje teraz odchylenie ≤ 0,5 od
+połowy rozegranych meczów, więc kolejna „oczywista" zmiana tej reguły natychmiast zapali się na
+czerwono.
+
+---
+
 ## Django → Symfony
 
 Tabela rośnie z każdym etapem.
@@ -970,3 +1144,6 @@ Tabela rośnie z każdym etapem.
 | `UniqueConstraint(condition=Q(...))` | zwykły `UNIQUE` — NULL-e i tak są różne | `src/Entity/RosterEntry.php` |
 | `assertNumQueries()` | profiler + `DoctrineDataCollector::getQueryCount()` | `tests/Api/SquadApiTest.php` |
 | `DateField` serializowane jako `Y-m-d` | `#[Context([DateTimeNormalizer::FORMAT_KEY => 'Y-m-d'])]` | `src/Dto/Output/SeasonResource.php` |
+| `select_for_update()` | `EntityManager::find(..., LockMode::PESSIMISTIC_WRITE)` | `src/Domain/Fixture/FixtureGenerator.php` |
+| serwis w `services.py` bez importu modeli | klasa w `src/Domain/**` bez Doctrine | `src/Domain/Fixture/RoundRobinScheduler.php` |
+| `SimpleTestCase` (bez bazy) | `PHPUnit\Framework\TestCase` (bez kernela) | `tests/Domain/RoundRobinSchedulerTest.php` |

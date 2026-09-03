@@ -3,6 +3,8 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { apiFetch } from './client'
 import { qk } from './keys'
 import type {
+  Fixture,
+  GenerateFixturesPayload,
   League,
   RosterEntry,
   RosterEntryPayload,
@@ -149,4 +151,39 @@ export function useRemoveFromSquad(path: SeasonPath, seasonTeamId: number) {
       method: 'DELETE',
     }),
   )
+}
+
+export function useFixtures(path: SeasonPath) {
+  return useQuery({
+    queryKey: qk.fixtures(path.organizationId, path.leagueId, path.seasonId),
+    queryFn: () => apiFetch<Fixture[]>(`${seasonPath(path)}/fixtures`),
+  })
+}
+
+export function useGenerateFixtures(path: SeasonPath) {
+  const queryClient = useQueryClient()
+
+  return useMutation({
+    mutationFn: (payload: GenerateFixturesPayload) =>
+      apiFetch<Fixture[]>(`${seasonPath(path)}/fixtures/generate`, {
+        method: 'POST',
+        body: payload,
+      }),
+    onSuccess: () =>
+      queryClient.invalidateQueries({
+        queryKey: qk.season(path.organizationId, path.leagueId, path.seasonId),
+      }),
+  })
+}
+
+export function useClearFixtures(path: SeasonPath) {
+  const queryClient = useQueryClient()
+
+  return useMutation({
+    mutationFn: () => apiFetch<void>(`${seasonPath(path)}/fixtures`, { method: 'DELETE' }),
+    onSuccess: () =>
+      queryClient.invalidateQueries({
+        queryKey: qk.season(path.organizationId, path.leagueId, path.seasonId),
+      }),
+  })
 }
