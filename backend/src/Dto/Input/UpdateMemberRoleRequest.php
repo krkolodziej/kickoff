@@ -10,8 +10,17 @@ use Symfony\Component\Validator\Constraints as Assert;
 final class UpdateMemberRoleRequest
 {
     public function __construct(
-        #[Assert\Choice(callback: [OrganizationRole::class, 'assignable'], message: 'Choose a valid role.')]
-        public OrganizationRole $role = OrganizationRole::Member,
+        /* A string for the same reason as AddMemberRequest::$role. */
+        #[Assert\Choice(
+            callback: [OrganizationRole::class, 'assignableValues'],
+            message: 'Choose a valid role.',
+        )]
+        public string $role = 'MEMBER',
     ) {
+    }
+
+    public function role(): OrganizationRole
+    {
+        return OrganizationRole::from($this->role);
     }
 }

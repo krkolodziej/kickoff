@@ -48,7 +48,7 @@ final class MembershipController extends AbstractController
         OrganizationScope $scope,
         #[MapRequestPayload] AddMemberRequest $payload,
     ): JsonResponse {
-        $membership = $this->organizations->addMember($scope->organization(), $payload->email, $payload->role);
+        $membership = $this->organizations->addMember($scope->organization(), $payload->email, $payload->role());
 
         return $this->json(MembershipResource::fromEntity($membership), Response::HTTP_CREATED);
     }
@@ -62,7 +62,7 @@ final class MembershipController extends AbstractController
     ): JsonResponse {
         $membership = $this->membership($scope, $membershipId);
 
-        $this->organizations->changeRole($membership, $payload->role);
+        $this->organizations->changeRole($membership, $payload->role());
 
         return $this->json(MembershipResource::fromEntity($membership));
     }

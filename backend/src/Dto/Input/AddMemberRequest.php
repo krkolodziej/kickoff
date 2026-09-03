@@ -13,14 +13,29 @@ final class AddMemberRequest
         #[Assert\NotBlank(message: 'Enter the email address of the person to add.')]
         #[Assert\Email(message: 'Enter a valid email address.')]
         public string $email = '',
-
-        /**
-         * Constrained to the assignable roles, so `OWNER` in a request body is a validation
-         * error rather than a way to mint a second owner. The enum is the whole allow-list;
-         * there is no second place to keep in step with it.
+        /*
+         * A string, not an OrganizationRole, and that is deliberate.
+         *
+         * Typed as the enum, an unrecognised value is rejected by the serializer before
+         * validation ever runs, and the caller is told "This value should be of type
+         * int|string." — accurate, and no help at all to somebody filling in a form. As a
+         * string it reaches our own Choice constraint, so every bad role — unknown, or
+         * simply not assignable, like OWNER — comes back with the same sentence.
          */
-        #[Assert\Choice(callback: [OrganizationRole::class, 'assignable'], message: 'Choose a valid role.')]
-        public OrganizationRole $role = OrganizationRole::Member,
+        #[Assert\Choice(
+            callback: [OrganizationRole::class, 'assignableValues'],
+            message: 'Choose a valid role.',
+        )]
+        public string $role = 'MEMBER',
     ) {
+    }
+
+    /**
+     * Safe because validation has already run: MapRequestPayload validates before the
+     * controller is called, so an unassignable value never reaches this method.
+     */
+    public function role(): OrganizationRole
+    {
+        return OrganizationRole::from($this->role);
     }
 }

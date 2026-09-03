@@ -37,4 +37,19 @@ enum OrganizationRole: string
     {
         return [self::Admin, self::Member];
     }
+
+    /**
+     * The same list as it appears on the wire.
+     *
+     * Request DTOs carry the role as a string rather than as this enum, so that an
+     * unrecognised value fails our own Choice constraint with a message written for a
+     * person. Typed as the enum, denormalisation would reject it first, and the user would
+     * be told "This value should be of type int|string." — true, and useless.
+     *
+     * @return list<string>
+     */
+    public static function assignableValues(): array
+    {
+        return array_map(static fn (self $role): string => $role->value, self::assignable());
+    }
 }

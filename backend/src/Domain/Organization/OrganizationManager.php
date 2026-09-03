@@ -40,9 +40,21 @@ final class OrganizationManager
     /**
      * Creates the organization and the creator's ownership together.
      *
-     * Both, or neither. An organization with no owner cannot be administered and cannot be
-     * deleted — it would be a row nobody on earth has authority over, and only a migration
-     * could clean it up.
+     * Both, or neither: an organization with no owner is a row nobody on earth has authority
+     * over, so it can neither be administered nor deleted, and only a migration could clean
+     * it up.
+     *
+     * Worth being precise about what the transaction adds, because it is less than it looks:
+     * a single flush() is already atomic — Doctrine wraps every commit in a transaction of
+     * its own — so the two inserts would stand or fall together regardless. What
+     * wrapInTransaction() buys here is that the slug lookup and the insert are one unit of
+     * work with an explicit boundary.
+     *
+     * What it does *not* buy is safety against two people creating the same name at the same
+     * instant. Without SELECT … FOR UPDATE both transactions can read the slug as free, and
+     * the unique index is what stops the second one — as an integrity violation, which today
+     * surfaces as a 500. Rare enough to accept for now; the locking pattern that fixes it
+     * arrives with fixture generation, where the race is routine rather than theoretical.
      */
     public function create(User $creator, string $name, ?string $requestedSlug): OrganizationMembership
     {

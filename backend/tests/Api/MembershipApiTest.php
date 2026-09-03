@@ -85,6 +85,26 @@ final class MembershipApiTest extends ApiTestCase
         self::assertArrayHasKey('role', $this->json()['fields']);
     }
 
+    /**
+     * Both ways of getting the role wrong have to read the same, or the form shows the user
+     * a sentence about PHP types instead of one about roles.
+     */
+    public function testAnUnrecognisedRoleReadsLikeAnUnassignableOne(): void
+    {
+        $owner = UserFactory::createOne();
+        $organization = OrganizationFactory::createOne(['createdBy' => $owner]);
+        UserFactory::createOne(['email' => 'newcomer@kickoff.test']);
+        $token = $this->signIn($owner);
+        $uri = '/api/v1/organizations/'.$organization->getId().'/members';
+
+        $this->request('POST', $uri, ['email' => 'newcomer@kickoff.test', 'role' => 'SUPERVISOR'], $token);
+        self::assertResponseStatusCodeSame(Response::HTTP_UNPROCESSABLE_ENTITY);
+        self::assertSame(['Choose a valid role.'], $this->json()['fields']['role']);
+
+        $this->request('POST', $uri, ['email' => 'newcomer@kickoff.test', 'role' => 'OWNER'], $token);
+        self::assertSame(['Choose a valid role.'], $this->json()['fields']['role']);
+    }
+
     public function testTheOwnerMembershipCannotBeDemoted(): void
     {
         $owner = UserFactory::createOne();
