@@ -25,4 +25,21 @@ export const qk = {
 
   players: (organizationId: number, params?: ListParams) =>
     ['organizations', organizationId, 'players', params ?? {}] as const,
+
+  league: (organizationId: number, leagueId: number) =>
+    ['organizations', organizationId, 'leagues', leagueId] as const,
+
+  seasons: (organizationId: number, leagueId: number) =>
+    [...qk.league(organizationId, leagueId), 'seasons'] as const,
+
+  // Everything below a season hangs off this key, so registering a club or editing a squad
+  // can invalidate the lot with one call — and so can generating a calendar, next stage.
+  season: (organizationId: number, leagueId: number, seasonId: number) =>
+    [...qk.seasons(organizationId, leagueId), seasonId] as const,
+
+  seasonTeams: (organizationId: number, leagueId: number, seasonId: number) =>
+    [...qk.season(organizationId, leagueId, seasonId), 'teams'] as const,
+
+  roster: (organizationId: number, leagueId: number, seasonId: number, seasonTeamId: number) =>
+    [...qk.seasonTeams(organizationId, leagueId, seasonId), seasonTeamId, 'roster'] as const,
 } as const

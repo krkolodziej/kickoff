@@ -102,6 +102,56 @@ export interface Player {
   created_at: string
 }
 
+export type PlayerPosition = 'GOALKEEPER' | 'DEFENDER' | 'MIDFIELDER' | 'FORWARD'
+
+export const PLAYER_POSITIONS = [
+  'GOALKEEPER',
+  'DEFENDER',
+  'MIDFIELDER',
+  'FORWARD',
+] as const satisfies readonly PlayerPosition[]
+
+export interface Season {
+  id: number
+  league_id: number
+  name: string
+  start_date: string
+  end_date: string | null
+  created_at: string
+}
+
+export interface SeasonTeam {
+  id: number
+  season_id: number
+  team_id: number
+  team_name: string
+  team_short_name: string
+  squad_size: number
+}
+
+export interface RosterEntry {
+  id: number
+  season_team_id: number
+  player_id: number
+  player_name: string
+  shirt_number: number | null
+  position: PlayerPosition | null
+  captain: boolean
+}
+
+export interface SeasonPayload {
+  name: string
+  start_date: string
+  end_date?: string | null
+}
+
+export interface RosterEntryPayload {
+  player_id: number
+  shirt_number?: number | null
+  position?: PlayerPosition | null
+  captain: boolean
+}
+
 export interface LeaguePayload {
   name: string
   slug?: string

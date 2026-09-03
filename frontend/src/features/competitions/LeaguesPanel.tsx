@@ -2,6 +2,7 @@ import { zodResolver } from '@hookform/resolvers/zod'
 import { Plus, Trash2 } from 'lucide-react'
 import { useCallback, useState } from 'react'
 import { useForm } from 'react-hook-form'
+import { Link } from 'react-router-dom'
 import { z } from 'zod'
 
 import { useCreateLeague, useDeleteLeague, useLeagues } from '@/api/competitions'
@@ -116,10 +117,13 @@ export function LeaguesPanel({
       key: 'name',
       header: 'League',
       render: (league) => (
-        <div>
+        <Link
+          to={`/organizations/${organizationId}/leagues/${league.id}`}
+          className="block hover:text-primary"
+        >
           <p className="font-medium">{league.name}</p>
           <p className="text-[13px] text-foreground-subtle">/{league.slug}</p>
-        </div>
+        </Link>
       ),
     },
     {

@@ -40,6 +40,16 @@ dokumentu rośnie z każdym etapem.
   - [3a.6 URL jako stan listy](#3a6-url-jako-stan-listy)
   - [3a.7 Pułapki Stage 3a](#3a7-pułapki-stage-3a)
   - [Pytania na rozmowę](#pytania-na-rozmowę--stage-3a)
+- [Stage 3b — sezony, rejestracja klubów i składy](#stage-3b--sezony-rejestracja-klubów-i-składy)
+  - [3b.1 Własny Constraint: kiedy naprawdę jest potrzebny](#3b1-własny-constraint-kiedy-naprawdę-jest-potrzebny)
+  - [3b.2 Gdzie mieszka która reguła](#3b2-gdzie-mieszka-która-reguła)
+  - [3b.3 NULL-e w unikalnym indeksie](#3b3-nulle-w-unikalnym-indeksie)
+  - [3b.4 Kapitan: degradacja zamiast odmowy](#3b4-kapitan-degradacja-zamiast-odmowy)
+  - [3b.5 Cztery poziomy zagnieżdżenia](#3b5-cztery-poziomy-zagnieżdżenia)
+  - [3b.6 Dwa N+1 w jednym endpointcie](#3b6-dwa-n1-w-jednym-endpointcie)
+  - [3b.7 Data to nie moment](#3b7-data-to-nie-moment)
+  - [3b.8 Pułapki Stage 3b](#3b8-pułapki-stage-3b)
+  - [Pytania na rozmowę](#pytania-na-rozmowę--stage-3b)
 - [Django → Symfony](#django--symfony)
 
 ---
@@ -761,6 +771,177 @@ zapytaniami. Przy `LIMIT/OFFSET` czytelnik zobaczy wtedy jeden wiersz dwa razy, 
 
 ---
 
+## Stage 3b — sezony, rejestracja klubów i składy
+
+### 3b.1 Własny Constraint: kiedy naprawdę jest potrzebny
+
+`backend/src/Validator/SeasonName.php` + `SeasonNameValidator.php`
+
+Sezon nazywa się „2026" albo „2026/27". Regex sprawdzi **kształt** `\d{4}(/\d{2})?` — ale nie
+sprawdzi **arytmetyki**: „2026/27" to sezon, a „2026/29" to literówka i żaden wzorzec ich nie
+rozróżni. Trzeba sparsować obie połówki i je porównać, a to już jest praca dla walidatora.
+
+Anatomia jest prosta i warto ją znać na pamięć:
+
+- **Constraint** to obiekt-wartość z komunikatami i opcjami. Sam nic nie robi.
+- **ConstraintValidator** to **usługa** — może mieć wstrzyknięte zależności.
+- Symfony łączy je po nazwie: `SeasonName` → `SeasonNameValidator`. Bez konfiguracji.
+- Walidator **nie sprawdza pustości**. `null` i `''` przepuszcza, bo od tego jest `NotBlank`.
+  Walidator, który sam wymusza „wymagane", nie da się użyć na polu opcjonalnym — i tak działa
+  każdy constraint w Symfony.
+
+Test (`backend/tests/Validator/SeasonNameValidatorTest.php`) używa
+`ConstraintValidatorTestCase`, który podstawia sztuczny kontekst wykonania — całość idzie bez
+kernela i bez bazy, mikrosekundy na przypadek.
+
+I ten test **od razu znalazł błąd**: `2099/00` to sezon 2099–2100, a moja arytmetyka
+(„weź stulecie pierwszego roku") liczyła 2000. Poprawka to trzy linijki, ale sam błąd
+odezwałby się raz na sto lat — czyli nigdy w testach ręcznych.
+
+Uwaga na kontrast: `end_date >= start_date` **nie** dostało własnego constraintu, bo
+`#[Assert\GreaterThanOrEqual(propertyPath: 'startDate')]` robi dokładnie to samo. Pisanie
+własnego tam, gdzie wbudowany pasuje, to nie nauka, tylko kod do utrzymania.
+
+### 3b.2 Gdzie mieszka która reguła
+
+Podział, który warto umieć uzasadnić:
+
+| Reguła | Gdzie | Dlaczego |
+| --- | --- | --- |
+| „2026/29 to nie jest nazwa sezonu" | Constraint | dotyczy **samej wartości** |
+| „koniec nie przed początkiem" | wbudowany Constraint | dotyczy dwóch pól tego samego obiektu |
+| „klub musi być z tej organizacji" | `SquadManager` | potrzebuje **kontekstu** żądania |
+| „numer 9 jest zajęty w tym składzie" | `SquadManager` | potrzebuje **bazy i składu** |
+
+Walidator nie ma jak się dowiedzieć, **która organizacja pyta** — nie widzi trasy ani tokenu.
+Można mu to wstrzyknąć przez `RequestStack`, ale wtedy powstaje walidator, który działa tylko
+w kontekście HTTP i nie da się go przetestować bez żądania. Reguły zależne od kontekstu żyją
+więc w warstwie domenowej, dokładnie tam gdzie `addMember` ze Stage 2.
+
+### 3b.3 NULL-e w unikalnym indeksie
+
+Numer na koszulce jest unikalny **w składzie**, ale kolumna jest nullowalna, bo skład bywa
+wpisywany zanim numery zostaną rozdane.
+
+Naiwna obawa: „unikalny indeks nie pozwoli na dwóch zawodników bez numeru". Nieprawda — **SQL
+traktuje NULL-e jako różne**, więc zwykły `UNIQUE (season_team_id, shirt_number)` dopuszcza
+dowolnie wielu nienumerowanych i jednocześnie odrzuca dwie dziewiątki. Żadnego indeksu
+częściowego nie trzeba, co jest o tyle wygodne, że **MariaDB ich nie ma**.
+
+Aplikacja, którą to zastępuje, dokładała tam warunek `WHERE shirt_number IS NOT NULL`. Na
+PostgreSQL to działa i jest nadmiarowe; tutaj byłoby po prostu niemożliwe.
+
+Test na to jest, bo to dokładnie ta reguła, którą ktoś „poprawi" przy następnej migracji.
+
+### 3b.4 Kapitan: degradacja zamiast odmowy
+
+Kapitan jest najwyżej jeden na skład — i tego akurat **nie da się oddać schematowi** na
+MariaDB, bo wymagałoby to indeksu częściowego (`UNIQUE WHERE captain`). Istnieje sztuczka z
+kolumną generowaną (`IF(captain, season_team_id, NULL)` + unikalny indeks), ale kolumna
+generowana rozjeżdża `doctrine:schema:validate` i sprawia, że `migrations:diff` przestaje
+wracać pusty — cena wyższa niż zysk.
+
+Więc reguła żyje w `SquadManager`. Ale **nie jako odmowa**: nadanie opaski kapitana
+**degraduje poprzedniego**. Odmowa zmusiłaby operatora do szukania, kto ją aktualnie ma —
+księgowość, którą komputer wykona lepiej niż człowiek. Cała operacja idzie w jednej
+transakcji, więc nie ma momentu z dwoma kapitanami.
+
+Uczciwie: to jest jedyne wymuszenie tego niezmiennika. Dwa równoległe żądania mogą teoretycznie
+zostawić dwóch kapitanów. Przy jednym operatorze wpisującym skład to nie jest realne ryzyko —
+ale **jest** zapisane, a nie przemilczane.
+
+### 3b.5 Cztery poziomy zagnieżdżenia
+
+`/organizations/{o}/leagues/{l}/seasons/{s}/teams/{st}/roster/{r}`
+
+`SeasonTeamScope` niesie cały łańcuch: organizacja → liga → sezon → zarejestrowany klub, i
+**wszystko to jedno zapytanie** (`SeasonTeamRepository::findScoped`). Kontroler dostaje gotowy
+obiekt i nie sprawdza niczego.
+
+Zagnieżdżenie w URL-u znaczy coś tylko wtedy, gdy łańcuch jest **weryfikowany**. Sezon 1
+osiągnięty przez ligę 2, do której nie należy, musi być brakującym wierszem — jest na to test i
+sprawdziłem to też ręcznie: `404 not_found`.
+
+### 3b.6 Dwa N+1 w jednym endpointcie
+
+Lista klubów sezonu zwraca też `squad_size`. Pierwsza wersja miała **dwa** N+1 naraz i tylko
+jeden był oczywisty:
+
+1. Brak `addSelect('t')` → klub jest leniwym proxy, budzonym raz na wiersz.
+2. `$seasonTeam->getRosterEntries()->count()` na niezainicjalizowanej kolekcji **ładuje całą
+   kolekcję**. Czyli jedno zapytanie na klub, pobierające wiersze, których nikt nie chciał,
+   tylko po to, żeby je policzyć i wyrzucić.
+
+Drugi jest paskudniejszy, bo wygląda niewinnie: `->count()` czyta się jak `COUNT(*)`.
+
+Test nie sprawdza progu („mniej niż 8 zapytań"), tylko **stałość**: to samo żądanie dla 3 i dla
+10 klubów musi kosztować tyle samo zapytań. Mocniejsze twierdzenie i nie ma magicznej liczby do
+utrzymywania.
+
+Rozwiązanie to dwa zapytania niezależne od liczby klubów: encje z joinem klubu, a liczności
+osobnym `GROUP BY`. Celowo **nie** jednym zapytaniem z `COUNT()` obok hydratowanych encji — to
+wymaga `GROUP BY` po wszystkich wybranych kolumnach i właśnie tam zaczynają się różnice
+`ONLY_FULL_GROUP_BY` między MySQL a MariaDB.
+
+### 3b.7 Data to nie moment
+
+Zobaczyłem to na ekranie: `2026-08-15T00:00:00+02:00 – ongoing`.
+
+Serializer domyślnie emituje RFC 3339, więc `date_immutable` dostaje **wymyśloną północ i
+wymyśloną strefę**. To nie jest tylko brzydkie: klient godzinę na zachód wyrenderuje dzień
+wcześniejszy.
+
+Lekarstwo to atrybut na właściwości DTO:
+
+```php
+#[Context([DateTimeNormalizer::FORMAT_KEY => 'Y-m-d'])]
+public \DateTimeImmutable $startDate,
+```
+
+`created_at` **zostaje** pełnym RFC 3339, bo utworzenie wiersza naprawdę jest momentem. Oba
+przypięte testami.
+
+### 3b.8 Pułapki Stage 3b
+
+**`Doctrine\DBAL\Logging\DebugStack` już nie istnieje** — usunięty w DBAL 4. Liczenie zapytań
+robi się dziś przez profiler: `$client->enableProfiler()`, potem
+`$profile->getCollector('db')->getQueryCount()`. W środowisku testowym profiler ma
+`collect: false`, więc nic nie zbiera dopóki test o to nie poprosi — reszta suite'u nic nie
+płaci.
+
+**NULL-e nie sortują się na końcu same z siebie.** W MariaDB `ORDER BY shirt_number ASC` stawia
+NULL-e **pierwsze**. Skład ma je mieć na końcu, więc repozytorium sortuje po wyrażeniu
+`CASE WHEN r.shirtNumber IS NULL THEN 1 ELSE 0 END`, a dopiero potem po numerze.
+
+**Numer koszulki zapisywany na `blur`, nie na `change`.** Wpisując „12" przechodzi się przez
+„1" — a przy zapisie na każdą zmianę poleciałoby żądanie o numer, który ktoś inny może już
+nosić, i pole zapaliłoby się na czerwono w połowie pisania.
+
+### Pytania na rozmowę — Stage 3b
+
+**Kiedy pisać własny Constraint, a kiedy nie?**
+Gdy reguła dotyczy samej wartości i żaden wbudowany jej nie wyraża — jak arytmetyka lat w
+nazwie sezonu. Gdy reguła potrzebuje kontekstu żądania (kto pyta, o którą organizację), jej
+miejsce jest w warstwie domenowej: walidator nie ma jak się tego dowiedzieć, a wstrzyknięcie mu
+`RequestStack` daje walidator, którego nie da się przetestować bez HTTP.
+
+**Czy unikalny indeks na nullowalnej kolumnie zablokuje wiele NULL-i?**
+Nie. SQL traktuje NULL-e jako różne, więc `UNIQUE (season_team_id, shirt_number)` dopuszcza
+dowolnie wielu zawodników bez numeru i odrzuca dwóch z tym samym. Dlatego indeks częściowy jest
+tu niepotrzebny — co dobrze się składa, bo MariaDB go nie ma.
+
+**Dlaczego `->count()` na kolekcji Doctrine bywa pułapką?**
+Bo na niezainicjalizowanej kolekcji ładuje **całą kolekcję**, a nie wykonuje `COUNT`. W pętli
+po dwunastu klubach to dwanaście zapytań pobierających dane, których nikt nie użyje.
+`fetch: 'EXTRA_LAZY'` zamienia to na `COUNT` — wciąż jeden na klub. Stałym kosztem jest dopiero
+osobne zapytanie z `GROUP BY`.
+
+**Co jest złego w `"2026-08-15T00:00:00+02:00"` jako dacie startu sezonu?**
+Wymyśla północ i strefę czasową, których wartość nie ma. Klient w innej strefie może przesunąć
+to na dzień wcześniejszy, a porównania dat zaczynają zależeć od tego, kto pyta.
+
+---
+
 ## Django → Symfony
 
 Tabela rośnie z każdym etapem.
@@ -784,3 +965,8 @@ Tabela rośnie z każdym etapem.
 | DRF `pagination_class` + `PageNumberPagination` | `Doctrine\ORM\Tools\Pagination\Paginator` + `Listing::respond()` | `src/Repository/Listing.php` |
 | DRF `filter_backends` / `ordering_fields` | whitelista nazwa-API → wyrażenie DQL | `src/Controller/Api/*Controller.php` |
 | `request.query_params` + `serializers.Serializer` | `#[MapQueryString]` + `ListQuery` | `src/Dto/Input/ListQuery.php` |
+| `validators=[...]` / `clean_<field>()` | `Constraint` + `ConstraintValidator` | `src/Validator/SeasonName.php` |
+| `Model.clean()` z dostępem do powiązań | serwis domenowy | `src/Domain/Squad/SquadManager.php` |
+| `UniqueConstraint(condition=Q(...))` | zwykły `UNIQUE` — NULL-e i tak są różne | `src/Entity/RosterEntry.php` |
+| `assertNumQueries()` | profiler + `DoctrineDataCollector::getQueryCount()` | `tests/Api/SquadApiTest.php` |
+| `DateField` serializowane jako `Y-m-d` | `#[Context([DateTimeNormalizer::FORMAT_KEY => 'Y-m-d'])]` | `src/Dto/Output/SeasonResource.php` |

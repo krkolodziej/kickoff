@@ -174,6 +174,17 @@ Base path `/api/v1`. Everything is JSON.
 | `GET` `PATCH` `DELETE` | `/organizations/{id}/teams/{teamId}` | member · admin | One club |
 | `GET` `POST` | `/organizations/{id}/players` | member · admin | People, separate from any squad |
 | `GET` `PATCH` `DELETE` | `/organizations/{id}/players/{playerId}` | member · admin | One player |
+| `GET` `POST` | `…/leagues/{leagueId}/seasons` | member · admin | Editions of a league |
+| `GET` `PATCH` `DELETE` | `…/seasons/{seasonId}` | member · admin | One season |
+| `GET` `POST` | `…/seasons/{seasonId}/teams` | member · admin | Clubs registered for the season |
+| `DELETE` | `…/seasons/{seasonId}/teams/{seasonTeamId}` | admin | Withdraw a club |
+| `GET` `POST` | `…/teams/{seasonTeamId}/roster` | member · admin | A club's squad for that season |
+| `PATCH` `DELETE` | `…/roster/{rosterEntryId}` | admin | Number, position, captain, or removal |
+
+Dates that are dates — a season's start and end, a player's date of birth — are emitted as
+`2026-08-15`, not as RFC 3339. A timestamp would invent a midnight and a timezone the value
+does not have, and a client an hour west could render the day before. `created_at` keeps the
+full form, because that one really is an instant.
 
 Authority is granted **per organization**, not globally: the same person can own one
 competition and merely read another. "member", "admin" and "owner" above are roles inside the
@@ -235,6 +246,11 @@ the request body — so a client can apply them to its form without a lookup tab
 | `conflict` | 409 | Well-formed, but the current state forbids it |
 | `already_a_member` | 409 | That account is already in the organization |
 | `owner_membership_protected` | 403 | Ownership is not editable through the members API |
+| `invalid_ordering` | 400 | `order` named a field this resource does not sort on |
+| `season_name_taken` | 409 | That league already has a season with that name |
+| `already_registered` | 409 | That club is already in this season |
+| `already_in_squad` | 409 | That player is already in this squad |
+| `squad_rule_violated` | 422 | A shirt number is taken, or the player belongs elsewhere |
 
 ### Tokens
 
@@ -257,7 +273,7 @@ straight back out.
 | 1 | Foundation: accounts, JWT, the error envelope, the design system | ✅ |
 | 2 | Organizations and per-organization roles | ✅ |
 | 3a | Leagues, clubs, players, and the list machinery | ✅ |
-| 3b | Seasons, squad registration, rosters | |
+| 3b | Seasons, squad registration, rosters | ✅ |
 | 4 | Round-robin fixture generation | |
 | 5 | Matches, the state machine, goals and cards | |
 | 6 | Standings, player statistics, demo data | |

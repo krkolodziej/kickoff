@@ -5,6 +5,8 @@ import { RequireAnonymous, RequireAuth } from '@/components/RouteGuards'
 import { AuthLayout } from '@/features/auth/AuthLayout'
 import { SignInPage } from '@/features/auth/SignInPage'
 import { SignUpPage } from '@/features/auth/SignUpPage'
+import { LeaguePage } from '@/features/competitions/LeaguePage'
+import { SeasonPage } from '@/features/competitions/SeasonPage'
 import { DashboardPage } from '@/features/dashboard/DashboardPage'
 import { OrganizationPage } from '@/features/organizations/OrganizationPage'
 import {
@@ -34,6 +36,13 @@ export const router = createBrowserRouter([
         element: <AppShell />,
         children: [
           { path: '/dashboard', element: <DashboardPage /> },
+          // Outside the organization's tab shell: a league has its own address and its
+          // own seasons, and a season its own clubs and squads.
+          { path: '/organizations/:organizationId/leagues/:leagueId', element: <LeaguePage /> },
+          {
+            path: '/organizations/:organizationId/leagues/:leagueId/seasons/:seasonId',
+            element: <SeasonPage />,
+          },
           {
             path: '/organizations/:organizationId',
             element: <OrganizationPage />,
