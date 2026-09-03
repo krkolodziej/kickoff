@@ -2,10 +2,9 @@
 .env.local
 .env.*.local
 
-# Editors and assistants
+# Editors
 .idea/
 .vscode/
-.claude/
 *.swp
 
 # OS noise
