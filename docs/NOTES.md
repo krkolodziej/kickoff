@@ -536,6 +536,22 @@ Doctrine stosuje `enumType` kolumny także do selecta skalarnego, więc przyjeż
 `OrganizationRole`. `(string) $row['role']` daje „Object of class … could not be converted to
 string" i 500.
 
+**Typowana właściwość enumowa w DTO psuje komunikat.** `public OrganizationRole $role`
+wygląda porządnie, ale nieznana wartość jest odrzucana przez **serializer, zanim walidacja w
+ogóle ruszy** — i użytkownik dostaje `This value should be of type int|string.` Prawda, i
+zero pożytku dla kogoś wypełniającego formularz. Dlatego DTO trzyma `string`, a walidację
+robi `#[Assert\Choice]` z `assignableValues()`; enum wychodzi z metody `role()`, wywołanej
+już po walidacji. Efekt: `SUPERVISOR` (nie ma takiego case'a), `OWNER` (jest, ale nie jest
+przydzielalny) i `admin` (zła wielkość liter) dają ten sam komunikat *Choose a valid role.*
+
+**`wrapInTransaction` daje mniej, niż się wydaje.** Pojedynczy `flush()` **już jest
+atomowy** — Doctrine opakowuje każdy commit własną transakcją — więc oba INSERT-y i tak
+przeszłyby albo nie przeszły razem. Transakcja kupuje tu wspólną granicę dla *odczytu sluga
+i zapisu*. Czego **nie** kupuje: odporności na wyścig, bo bez `SELECT … FOR UPDATE` obie
+transakcje mogą odczytać sluga jako wolny. Drugą zatrzymuje dopiero unikalny indeks —
+naruszeniem integralności, czyli dziś pięćsetką. Wzorzec z blokadą przychodzi przy
+generowaniu terminarza, gdzie wyścig jest regułą, a nie teorią.
+
 **`cascade: ['persist']` na kolekcji.** Bez tego membership utworzony w konstruktorze albo w
 fabryce testowej nie trafia do bazy, bo nikt go nie persystuje jawnie.
 
