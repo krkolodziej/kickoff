@@ -76,8 +76,17 @@ zupełnie inne poświadczenie:
 | `api` | `^/api` | nagłówek `Authorization: Bearer` | `jwt` (Lexik) |
 
 Kolejność ma znaczenie: Symfony bierze **pierwszy** firewall, którego `pattern` pasuje.
-Gdyby `api` był wyżej, żądanie logowania trafiłoby do authenticatora JWT, nie znalazłoby
-nagłówka i skończyłoby się 401 — zanim ktokolwiek spojrzałby na hasło.
+Firewall to nie „poziom ochrony", tylko **wybór authenticatora** — nie ma mocniejszych i
+słabszych, są takie, które czytają hasło z ciała żądania, i takie, które czytają nagłówek.
+
+Sprawdzone przez zamianę `api` i `login` miejscami: poprawne dane logowania dają wtedy
+**500**, nie 401. Łańcuch jest taki — firewall `api` przejmuje żądanie, authenticator `jwt`
+nie znajduje nagłówka `Authorization` i się nie aktywuje, `access_control` przepuszcza (bo
+`^/api/v1/auth/(login|register)$` ma `PUBLIC_ACCESS`), więc żądanie **dociera do
+kontrolera**, a ten rzuca `LogicException`. Logowanie przestaje istnieć jako mechanizm.
+
+Stąd `throw` zamiast pustej metody: gdyby `login()` zwracało `new JsonResponse([])`, ta sama
+literówka dawałaby **200 z pustym ciałem** i szukałoby się jej we froncie.
 
 **`stateless: true`** znaczy: żadnej sesji, żadnego ciasteczka `PHPSESSID`, żadnego
 `_security_main` w sesji. Konsekwencja, o którą pyta się na rozmowach: **skoro nie ma
@@ -86,10 +95,24 @@ podpiąć pod atak CSRF** — dlatego przy `json_login` na stateless firewallu n
 się tokenu CSRF. To nie zaniedbanie, tylko wniosek z braku ciasteczka sesyjnego.
 
 Uwaga do `check_path: api_auth_login`. Trasa **musi istnieć**, mimo że kontroler nigdy się
-nie wykona — routing (`RouterListener`, priorytet 32) działa **przed** firewallem
-(`FirewallListener`, priorytet 8), więc bez trasy dostalibyśmy 404 zanim authenticator
-zdążyłby zajrzeć do ciała żądania. Stąd metoda, która tylko rzuca wyjątek:
-`backend/src/Controller/Api/AuthController.php:41`.
+nie wykona. Powód jest czysto kolejnościowy — `php bin/console debug:event-dispatcher
+kernel.request` pokazuje:
+
+```
+#7   RouterListener::onKernelRequest()      32
+#11  FirewallListener::onKernelRequest()     8
+```
+
+Routing biegnie **przed** firewallem, więc bez trasy `RouterListener` rzuca 404 zanim
+`json_login` zajrzy do ciała żądania (sprawdzone: zakomentowanie `#[Route]` daje
+`{"detail":"Not found.","code":"not_found"}` przy nietkniętej konfiguracji security).
+Kontroler nie wykonuje się dlatego, że authenticator na priorytecie 8 ustawia odpowiedź i
+przerywa propagację — do `kernel.controller` nigdy nie dochodzi. Stąd metoda, która tylko
+rzuca wyjątek: `backend/src/Controller/Api/AuthController.php:41`.
+
+Drobiazg wart zapamiętania: `check_path` przyjmuje **nazwę trasy** albo ścieżkę. Przy nazwie
+usunięcie trasy wywala już budowanie kontenera — kolejny dowód, że to realna infrastruktura,
+a nie ozdobnik.
 
 **Passport.** Warto umieć nazwać przepływ: authenticator tworzy `Passport` z *badge'ami* —
 `UserBadge` (kogo szukamy) i `PasswordCredentials` albo `CustomCredentials`. Provider
@@ -152,10 +175,21 @@ Trzy rzeczy, które kosztowały mnie czas:
    `getPrevious()` — inaczej niepoprawny JSON ucieka jako gołe 400 z komunikatem Symfony
    (`:67`).
 2. **Ścieżki właściwości są camelCase.** Violation na `$passwordConfirm` ma
-   `propertyPath === 'passwordConfirm'`, a cała reszta API mówi snake_case. Gdyby to poszło
-   na wyjściu bez konwersji, frontend szukałby `fields.password_confirm`, nie znalazłby nic
-   i **po cichu nie pokazał żadnego błędu** — formularz odmawiałby wysłania bez wyjaśnienia.
-   Konwersja: `backend/src/Http/ViolationFormatter.php`.
+   `propertyPath === 'passwordConfirm'`, a cała reszta API mówi snake_case. To nie jest
+   kwestia bezpieczeństwa — to zwykłe niedopasowanie dwóch stringów, ale skutek zależy od
+   klienta i w gorszym wariancie jest paskudny:
+
+   - W naszym kliencie `applyApiErrorToForm` porównuje klucz z listą pól formularza. Nieznany
+     klucz trafia do kubełka „nieprzypisane" i wyświetla się jako **ogólny baner** nad
+     formularzem, a samo pole zostaje nieoznaczone. Brzydko, ale użytkownik widzi komunikat.
+   - W naiwnym kliencie, który po prostu woła `setError(klucz, …)` dla każdego wpisu,
+     react-hook-form rejestruje błąd na polu, którego nie ma. Od tej chwili `handleSubmit`
+     **odmawia wywołania `onSubmit`**, a jednocześnie **żaden input nic nie pokazuje**:
+     formularz nie wysyła i nie mówi dlaczego.
+
+   Kubełek na nieprzypisane komunikaty istnieje właśnie po to, żeby wymusić pierwszy wariant
+   zamiast drugiego (test: `frontend/src/lib/apiErrorToForm.test.ts`). Sama konwersja:
+   `backend/src/Http/ViolationFormatter.php`.
 3. **Komunikaty 404 i 405 Symfony cytują URI i tablicę tras.** To wyciek szczegółów
    wewnętrznych, więc dla tych dwóch statusów podstawiam własny tekst (`:139`).
 
