@@ -45,4 +45,10 @@ export const qk = {
 
   fixtures: (organizationId: number, leagueId: number, seasonId: number) =>
     [...qk.season(organizationId, leagueId, seasonId), 'fixtures'] as const,
+
+  fixture: (organizationId: number, leagueId: number, seasonId: number, fixtureId: number) =>
+    [...qk.fixtures(organizationId, leagueId, seasonId), fixtureId] as const,
+
+  matchEvents: (organizationId: number, leagueId: number, seasonId: number, fixtureId: number) =>
+    [...qk.fixture(organizationId, leagueId, seasonId, fixtureId), 'events'] as const,
 } as const

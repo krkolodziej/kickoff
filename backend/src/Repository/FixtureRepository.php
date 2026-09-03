@@ -5,7 +5,10 @@ declare(strict_types=1);
 namespace App\Repository;
 
 use App\Entity\Fixture;
+use App\Entity\MatchStatus;
+use App\Entity\OrganizationRole;
 use App\Entity\Season;
+use App\Entity\User;
 use Doctrine\Bundle\DoctrineBundle\Repository\ServiceEntityRepository;
 use Doctrine\Persistence\ManagerRegistry;
 
@@ -28,8 +31,17 @@ class FixtureRepository extends ServiceEntityRepository
      *
      * @return list<Fixture>
      */
-    public function findForSeason(Season $season, ?int $round = null, ?int $teamId = null): array
-    {
+    /**
+     * @param list<MatchStatus> $statuses
+     *
+     * @return list<Fixture>
+     */
+    public function findForSeason(
+        Season $season,
+        ?int $round = null,
+        ?int $teamId = null,
+        array $statuses = [],
+    ): array {
         $qb = $this->createQueryBuilder('f')
             ->addSelect('home', 'away')
             ->innerJoin('f.homeTeam', 'home')
@@ -50,8 +62,46 @@ class FixtureRepository extends ServiceEntityRepository
             $qb->andWhere('home.id = :teamId OR away.id = :teamId')->setParameter('teamId', $teamId);
         }
 
+        if ([] !== $statuses) {
+            $qb->andWhere('f.status IN (:statuses)')->setParameter('statuses', $statuses);
+        }
+
         /* @var list<Fixture> */
         return $qb->getQuery()->getResult();
+    }
+
+    /**
+     * The fixture, its season, its league and the caller's role — one query, as everywhere.
+     *
+     * @return array{0: Fixture, role: OrganizationRole}|null
+     */
+    public function findScoped(
+        User $user,
+        int $organizationId,
+        int $leagueId,
+        int $seasonId,
+        int $fixtureId,
+    ): ?array {
+        /* @var array{0: Fixture, role: OrganizationRole}|null */
+        return $this->createQueryBuilder('f')
+            ->select('f', 'home', 'away', 's', 'l', 'm.role AS role')
+            ->innerJoin('f.homeTeam', 'home')
+            ->innerJoin('f.awayTeam', 'away')
+            ->innerJoin('f.season', 's')
+            ->innerJoin('s.league', 'l')
+            ->innerJoin('l.organization', 'o')
+            ->innerJoin('o.memberships', 'm', 'WITH', 'm.user = :user')
+            ->where('f.id = :fixtureId')
+            ->andWhere('s.id = :seasonId')
+            ->andWhere('l.id = :leagueId')
+            ->andWhere('o.id = :organizationId')
+            ->setParameter('user', $user)
+            ->setParameter('fixtureId', $fixtureId)
+            ->setParameter('seasonId', $seasonId)
+            ->setParameter('leagueId', $leagueId)
+            ->setParameter('organizationId', $organizationId)
+            ->getQuery()
+            ->getOneOrNullResult();
     }
 
     public function seasonHasFixtures(Season $season): bool

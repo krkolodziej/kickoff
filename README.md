@@ -183,6 +183,23 @@ Base path `/api/v1`. Everything is JSON.
 | `GET` | `…/seasons/{seasonId}/fixtures` | member | The calendar, filterable by `round` and `team` |
 | `POST` | `…/seasons/{seasonId}/fixtures/generate` | admin | Pair every registered club; refuses a second run |
 | `DELETE` | `…/seasons/{seasonId}/fixtures` | admin | Clear the calendar |
+| `GET` | `…/fixtures/{fixtureId}` | member | One match, with its score and what it may do next |
+| `POST` | `…/fixtures/{fixtureId}/start` `/finish` `/cancel` `/postpone` `/reschedule` | admin | Move it through the machine |
+| `GET` `POST` | `…/fixtures/{fixtureId}/events` | member · admin | The timeline; recording is append-only |
+
+The calendar accepts `?status=LIVE,FINISHED`; an unrecognised value is a 400 rather than a
+filter that quietly does nothing.
+
+### The score is never typed in
+
+A goal is an event, and the score moves in the **same transaction** that records it. There is
+no endpoint that edits or deletes an event: the score is derived from those rows, so an
+editable event is a score that can stop matching its own history without anything noticing. A
+mistake is corrected by recording the truth.
+
+Each match reports `allowed_transitions` — what the server would accept right now — so a client
+disables a button instead of offering one that answers 409. The client keeps no copy of the
+rules, so the two cannot drift apart.
 
 Dates that are dates — a season's start and end, a player's date of birth — are emitted as
 `2026-08-15`, not as RFC 3339. A timestamp would invent a midnight and a timezone the value
@@ -256,6 +273,9 @@ the request body — so a client can apply them to its form without a lookup tab
 | `squad_rule_violated` | 422 | A shirt number is taken, or the player belongs elsewhere |
 | `fixtures_already_generated` | 409 | This season has a calendar; clear it first |
 | `not_enough_clubs` | 409 | Fewer than two clubs are registered |
+| `invalid_transition` | 409 | The match is not in a state that allows it; the message names what is |
+| `match_not_live` | 409 | Events are only recorded while a match is being played |
+| `match_event_rule_violated` | 422 | Wrong club, a player not in that squad, or a malformed substitution |
 
 ### Tokens
 
@@ -280,7 +300,7 @@ straight back out.
 | 3a | Leagues, clubs, players, and the list machinery | ✅ |
 | 3b | Seasons, squad registration, rosters | ✅ |
 | 4 | Round-robin fixture generation | ✅ |
-| 5 | Matches, the state machine, goals and cards | |
+| 5 | Matches, the state machine, goals and cards | ✅ |
 | 6 | Standings, player statistics, demo data | |
 | 7 | Messenger, notifications, scheduled reminders | |
 | 8 | Realtime match updates, hardening | |

@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Scope;
 
 use App\Entity\User;
+use App\Repository\FixtureRepository;
 use App\Repository\LeagueRepository;
 use App\Repository\OrganizationMembershipRepository;
 use App\Repository\SeasonRepository;
@@ -27,6 +28,7 @@ final class ScopeFactory
         private readonly LeagueRepository $leagues,
         private readonly SeasonRepository $seasons,
         private readonly SeasonTeamRepository $seasonTeams,
+        private readonly FixtureRepository $fixtures,
     ) {
     }
 
@@ -97,6 +99,32 @@ final class ScopeFactory
                 $season,
             ),
             $seasonTeam,
+        );
+    }
+
+    public function fixtureScope(
+        User $user,
+        int $organizationId,
+        int $leagueId,
+        int $seasonId,
+        int $fixtureId,
+    ): FixtureScope {
+        $row = $this->fixtures->findScoped($user, $organizationId, $leagueId, $seasonId, $fixtureId);
+
+        if (null === $row) {
+            throw new NotFoundHttpException();
+        }
+
+        $fixture = $row[0];
+        $season = $fixture->getSeason();
+        $league = $season->getLeague();
+
+        return new FixtureScope(
+            new SeasonScope(
+                new LeagueScope(new OrganizationScope($league->getOrganization(), $row['role']), $league),
+                $season,
+            ),
+            $fixture,
         );
     }
 }
