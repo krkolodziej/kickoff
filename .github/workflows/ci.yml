@@ -1,0 +1,101 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  backend:
+    name: API
+    runs-on: ubuntu-latest
+
+    services:
+      # Deliberately the same engine and major version as local development. A CI database
+      # that is "close enough" hides exactly the bugs CI is there to catch.
+      database:
+        image: mariadb:10.4
+        env:
+          MARIADB_ALLOW_EMPTY_ROOT_PASSWORD: 'yes'
+          MARIADB_DATABASE: kickoff
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping --silent"
+          --health-interval=5s
+          --health-timeout=5s
+          --health-retries=20
+
+    env:
+      DATABASE_URL: mysql://root:@127.0.0.1:3306/kickoff?serverVersion=10.4.32-MariaDB&charset=utf8mb4
+
+    defaults:
+      run:
+        working-directory: backend
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.2'
+          extensions: pdo_mysql, intl, openssl, sodium, zip
+          coverage: none
+          tools: composer:v2
+
+      - name: Cache Composer packages
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/composer/files
+          key: composer-${{ hashFiles('backend/composer.lock') }}
+          restore-keys: composer-
+
+      - run: composer install --no-interaction --no-progress --prefer-dist
+
+      - name: Generate JWT keys
+        run: php bin/console lexik:jwt:generate-keypair --skip-if-exists
+
+      - run: php bin/console lint:container
+      - run: php bin/console lint:yaml config --parse-tags
+
+      - name: Migrate and check the mapping matches the schema
+        run: |
+          php bin/console doctrine:database:create --if-not-exists
+          php bin/console doctrine:migrations:migrate --no-interaction
+          php bin/console doctrine:schema:validate
+
+      - run: composer cs
+      - run: composer stan
+      - run: composer test
+
+  frontend:
+    name: SPA
+    runs-on: ubuntu-latest
+
+    defaults:
+      run:
+        working-directory: frontend
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          # One LTS behind the local runtime on purpose: it catches anything that quietly
+          # depends on a very new Node.
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - run: npm ci
+      - run: npm run lint
+      - run: npx tsc -b
+      - run: npm run test
+      - run: npm run build

@@ -1,0 +1,8 @@
+# One line ending everywhere. Without this, php-cs-fixer and prettier disagree between a
+# Windows checkout and an Ubuntu CI runner, for ever.
+* text=auto eol=lf
+
+*.png binary
+*.jpg binary
+*.woff2 binary
+*.pem binary

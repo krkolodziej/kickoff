@@ -1,0 +1,13 @@
+# Local environment overrides
+.env.local
+.env.*.local
+
+# Editors and assistants
+.idea/
+.vscode/
+.claude/
+*.swp
+
+# OS noise
+Thumbs.db
+.DS_Store
