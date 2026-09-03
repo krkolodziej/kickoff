@@ -168,6 +168,12 @@ Base path `/api/v1`. Everything is JSON.
 | `POST` | `/organizations/{id}/members` | admin | Add an existing account by email |
 | `PATCH` | `/organizations/{id}/members/{membershipId}` | admin | Change someone's role |
 | `DELETE` | `/organizations/{id}/members/{membershipId}` | admin | Remove them |
+| `GET` `POST` | `/organizations/{id}/leagues` | member · admin | Competitions this organization runs |
+| `GET` `PATCH` `DELETE` | `/organizations/{id}/leagues/{leagueId}` | member · admin | One league |
+| `GET` `POST` | `/organizations/{id}/teams` | member · admin | Clubs, registered once and reused |
+| `GET` `PATCH` `DELETE` | `/organizations/{id}/teams/{teamId}` | member · admin | One club |
+| `GET` `POST` | `/organizations/{id}/players` | member · admin | People, separate from any squad |
+| `GET` `PATCH` `DELETE` | `/organizations/{id}/players/{playerId}` | member · admin | One player |
 
 Authority is granted **per organization**, not globally: the same person can own one
 competition and merely read another. "member", "admin" and "owner" above are roles inside the
@@ -180,6 +186,25 @@ An organization you are not a member of answers **404, never 403** — on every 
 would confirm the id is real, and iterating over ids while telling the two apart would map
 the whole system to someone with no account in it. Every scoped query joins the caller's
 membership, so there is no code path to a row outside it and no check anyone can forget.
+
+### Collections
+
+Every collection endpoint takes `search`, `order`, `page` and `page_size`.
+
+Paging is **opt-in**. Without `page` or `page_size` the response is a plain array; with either,
+it is an envelope:
+
+```json
+{ "count": 12, "page": 2, "page_size": 10, "next": null, "previous": 1, "results": [] }
+```
+
+`next` and `previous` are page numbers rather than URLs, so no response carries a hostname that
+then has to be right behind a proxy, in tests and in a container.
+
+`order` takes a field name, optionally prefixed with `-` to reverse it, and is checked against
+a per-resource allow-list. An unknown field is a **400 naming the fields that are allowed** —
+not a parameter silently ignored, which is how a list ends up in the wrong order in production
+while every response still looks plausible.
 
 ### Errors
 
@@ -231,7 +256,8 @@ straight back out.
 | --- | --- | --- |
 | 1 | Foundation: accounts, JWT, the error envelope, the design system | ✅ |
 | 2 | Organizations and per-organization roles | ✅ |
-| 3 | Leagues, seasons, clubs, players, squads | |
+| 3a | Leagues, clubs, players, and the list machinery | ✅ |
+| 3b | Seasons, squad registration, rosters | |
 | 4 | Round-robin fixture generation | |
 | 5 | Matches, the state machine, goals and cards | |
 | 6 | Standings, player statistics, demo data | |
