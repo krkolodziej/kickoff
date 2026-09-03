@@ -1,0 +1,182 @@
+@import 'tailwindcss';
+
+/*
+ * Tailwind v4 has no `tailwind.config.js` and no `darkMode: 'class'` option. Dark mode is
+ * this one line plus a `.dark` class on <html>. Nearly every tutorial still online is v3
+ * shaped and will quietly produce CSS that does nothing.
+ */
+@custom-variant dark (&:where(.dark, .dark *));
+
+/* ---------------------------------------------------------------------------
+ * 1. The brand. Raw values, theme-independent: the palette, the type, the shape.
+ * ------------------------------------------------------------------------ */
+@theme {
+  --font-sans: 'Inter Variable', ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif;
+
+  --color-pitch-50: oklch(0.97 0.02 158);
+  --color-pitch-100: oklch(0.93 0.05 158);
+  --color-pitch-300: oklch(0.8 0.11 158);
+  --color-pitch-500: oklch(0.62 0.15 158);
+  --color-pitch-600: oklch(0.55 0.14 158);
+  --color-pitch-700: oklch(0.46 0.12 158);
+  --color-pitch-900: oklch(0.28 0.07 158);
+
+  --radius-control: 0.5rem;
+  --radius-card: 0.875rem;
+
+  --shadow-panel: 0 1px 2px oklch(0.2 0.02 260 / 0.05), 0 4px 16px -6px oklch(0.2 0.02 260 / 0.12);
+  --shadow-lift: 0 2px 4px oklch(0.2 0.02 260 / 0.06), 0 12px 32px -10px oklch(0.2 0.02 260 / 0.22);
+}
+
+/* ---------------------------------------------------------------------------
+ * 2. The semantics. Every colour a component reaches for is named by role, and
+ *    defined for both themes here — never only inside a dark block.
+ * ------------------------------------------------------------------------ */
+@layer base {
+  :root {
+    --background: oklch(0.982 0.003 250);
+    --background-accent: oklch(0.955 0.008 200);
+    --surface: oklch(1 0 0);
+    --surface-muted: oklch(0.972 0.003 250);
+
+    --foreground: oklch(0.22 0.012 260);
+    --foreground-muted: oklch(0.52 0.015 260);
+    --foreground-subtle: oklch(0.64 0.012 260);
+
+    --border: oklch(0.91 0.005 260);
+    --border-strong: oklch(0.84 0.008 260);
+
+    --primary: var(--color-pitch-600);
+    --primary-hover: var(--color-pitch-700);
+    --primary-foreground: oklch(0.99 0 0);
+    --primary-wash: var(--color-pitch-50);
+
+    --danger: oklch(0.53 0.2 18);
+    --danger-wash: oklch(0.96 0.02 18);
+
+    /* Card colours, and only card colours. They are deliberately a different hue from
+       --danger so that a sending-off mark can never be mistaken for an error state,
+       and nothing outside the match timeline is allowed to reach for them. */
+    --booking: oklch(0.8 0.16 88);
+    --sending-off: oklch(0.56 0.21 30);
+
+    --ring: var(--color-pitch-500);
+
+    color-scheme: light;
+  }
+
+  /* The class is put on <html> by the theme provider, which resolves "system" against
+     prefers-color-scheme itself. One source of truth beats a media query and a class
+     racing each other. */
+  .dark {
+    --background: oklch(0.16 0.008 260);
+    --background-accent: oklch(0.19 0.014 250);
+    --surface: oklch(0.205 0.011 260);
+    --surface-muted: oklch(0.24 0.012 260);
+
+    --foreground: oklch(0.96 0.004 260);
+    --foreground-muted: oklch(0.72 0.012 260);
+    --foreground-subtle: oklch(0.6 0.012 260);
+
+    --border: oklch(0.29 0.012 260);
+    --border-strong: oklch(0.38 0.015 260);
+
+    --primary: var(--color-pitch-500);
+    --primary-hover: var(--color-pitch-300);
+    --primary-foreground: oklch(0.16 0.02 158);
+    --primary-wash: oklch(0.26 0.04 158);
+
+    --danger: oklch(0.68 0.17 18);
+    --danger-wash: oklch(0.28 0.06 18);
+
+    --booking: oklch(0.82 0.16 88);
+    --sending-off: oklch(0.63 0.21 30);
+
+    color-scheme: dark;
+  }
+}
+
+/* ---------------------------------------------------------------------------
+ * 3. The bridge. Exposing the semantic tokens to Tailwind's utility generator,
+ *    so `bg-surface` and `text-foreground-muted` exist as classes.
+ * ------------------------------------------------------------------------ */
+@theme inline {
+  --color-background: var(--background);
+  --color-background-accent: var(--background-accent);
+  --color-surface: var(--surface);
+  --color-surface-muted: var(--surface-muted);
+
+  --color-foreground: var(--foreground);
+  --color-foreground-muted: var(--foreground-muted);
+  --color-foreground-subtle: var(--foreground-subtle);
+
+  --color-border: var(--border);
+  --color-border-strong: var(--border-strong);
+
+  --color-primary: var(--primary);
+  --color-primary-hover: var(--primary-hover);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-primary-wash: var(--primary-wash);
+
+  --color-danger: var(--danger);
+  --color-danger-wash: var(--danger-wash);
+
+  --color-booking: var(--booking);
+  --color-sending-off: var(--sending-off);
+
+  --color-ring: var(--ring);
+}
+
+@layer base {
+  * {
+    border-color: var(--border);
+  }
+
+  html {
+    -webkit-text-size-adjust: 100%;
+  }
+
+  body {
+    /* The viewer paints its own ground behind the page, so this must be explicit. */
+    background-color: var(--background);
+    color: var(--foreground);
+    font-family: var(--font-sans);
+    font-feature-settings: 'cv05', 'ss01';
+    -webkit-font-smoothing: antialiased;
+  }
+
+  h1,
+  h2,
+  h3 {
+    letter-spacing: -0.02em;
+    font-weight: 650;
+  }
+
+  /* The whole product is columns of figures. Digits must not shift width. */
+  table,
+  .tabular {
+    font-variant-numeric: tabular-nums lining-nums;
+  }
+
+  :focus-visible {
+    outline: 2px solid var(--ring);
+    outline-offset: 2px;
+  }
+}
+
+@utility surface-panel {
+  background-color: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-card);
+  box-shadow: var(--shadow-panel);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}

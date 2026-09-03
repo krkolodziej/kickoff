@@ -1,0 +1,21 @@
+gesdinet_jwt_refresh_token:
+    refresh_token_class: App\Entity\RefreshToken
+    ttl: '%env(int:JWT_REFRESH_TTL)%'
+    single_use: '%env(bool:JWT_REFRESH_SINGLE_USE)%'
+
+    # Store a hash instead of the token itself, so a leaked database dump
+    # cannot be replayed against the refresh endpoint.
+    hash_tokens:
+        enabled: true
+        accept_stored_in_the_clear: false
+
+    # The refresh token never touches JavaScript. It lives in an httpOnly cookie
+    # scoped to the one path that consumes it, so an XSS cannot read it and no
+    # other request carries it around by accident.
+    cookie:
+        enabled: true
+        same_site: lax
+        path: /api/v1/token
+        http_only: true
+        secure: '%env(bool:JWT_REFRESH_COOKIE_SECURE)%'
+        remove_token_from_body: true
