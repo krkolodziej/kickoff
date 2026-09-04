@@ -2,9 +2,12 @@ doctrine:
     dbal:
         url: '%env(resolve:DATABASE_URL)%'
 
-        # IMPORTANT: You MUST configure your server version,
-        # either here or in the DATABASE_URL env var (see .env file)
-        #server_version: '16'
+        # Stated here rather than left to the connection string. Doctrine needs the platform
+        # to generate SQL, and without a version it will not even boot — which bites twice:
+        # `cache:warmup` runs at image build time with no database to ask, and a connection
+        # string pasted into a hosting form is easy to paste without the parameter. A
+        # `serverVersion` in the URL still overrides this.
+        server_version: '17'
 
         profiling_collect_backtrace: '%kernel.debug%'
         use_savepoints: true

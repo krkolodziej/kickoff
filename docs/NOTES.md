@@ -76,6 +76,7 @@ dokumentu rośnie z każdym etapem.
   - [D.5 Migracje z entrypointu](#d5-migracje-z-entrypointu)
   - [D.6 Deploy dopiero po zielonych checkach](#d6-deploy-dopiero-po-zielonych-checkach)
   - [D.7 Jeden menedżer pakietów](#d7-jeden-menedżer-pakietów)
+  - [D.8 Wersja serwera to konfiguracja](#d8-wersja-serwera-to-konfiguracja)
   - [Pytania na rozmowę](#pytania-na-rozmowę--wdrożenie)
 - [Django → Symfony](#django--symfony)
 
@@ -1458,6 +1459,35 @@ i wtedy psuje się bez związku z jakąkolwiek zmianą w kodzie. Warto sprawdzi�
 build i testy nadal przechodzą: jeśli któryś pakiet żył z takiego cichego importu, pnpm to
 ujawni od razu.
 
+### D.8 Wersja serwera to konfiguracja
+
+Pierwszy przebieg joba `Production image` padł — i dobrze, bo padł w PR-ze, a nie na produkcji.
+
+```
+In InvalidPlatformVersion.php line 21:
+  Invalid platform version "" specified.
+```
+
+Winny był `cache:warmup` w Dockerfile. Rozgrzewanie kontenera w trakcie builda zamienia
+pierwsze żądanie po deployu z wolnego w szybkie, ale wymaga zmiennych, bez których aplikacja w
+`prod` nie wstanie — więc dostaje atrapy. Atrapa `DATABASE_URL` nie miała `serverVersion`, a
+recepta Doctrine zostawia `server_version` **zakomentowane**, z uwagą, żeby ustawić je albo
+tam, albo w URL-u. Skoro było w URL-u lokalnym i w CI, brak w trzecim miejscu nie rzucał się w
+oczy.
+
+Prostsza łatka to dopisać parametr do atrapy. Gorsza, bo zostawia dokładnie ten sam błąd
+czekający na produkcji: connection string wklejony do formularza hostingu **bardzo łatwo
+wkleić bez parametru**, a komunikat, który wtedy dostajesz, nie wspomina, czego brakuje —
+kontener po prostu nie wstaje.
+
+Wersja poszła więc do `doctrine.yaml`. Doctrine potrzebuje platformy, żeby w ogóle wygenerować
+SQL, a platforma jest **własnością aplikacji**, nie poszczególnego połączenia: lokalnie, w CI i
+na Neonie to ten sam PostgreSQL 17. `serverVersion` w URL-u nadal nadpisuje ten domyślny, więc
+nic nie tracimy.
+
+Przy okazji krok warmupu w buildzie stał się testem tej decyzji: leci z gołym URL-em, więc
+gdyby domyślna wersja zniknęła, obraz przestałby się budować.
+
 ### Pytania na rozmowę — wdrożenie
 
 **Czemu nie generować pary kluczy JWT przy starcie kontenera?**
@@ -1474,6 +1504,12 @@ osłabiało ochronę przed CSRF.
 Bo w MySQL nieczułość na wielkość liter dawała kolacja `_ci` kolumny, a nie zapytanie.
 PostgreSQL porównuje bajty. Poprawne rozwiązanie to wymusić składanie po obu stronach
 (`LOWER(...) LIKE :param`), czyli powiedzieć wprost to, na co wcześniej się liczyło.
+
+**Skąd Doctrine wie, jakiej wersji serwera używa, i czemu to ważne?**
+Z `server_version` w konfiguracji albo z `serverVersion` w connection stringu. Potrzebuje tego,
+żeby wybrać platformę i wygenerować SQL — bez wersji nie wstanie, nawet jeśli nigdy nie zapyta
+bazy. Dlatego lepiej trzymać ją w konfiguracji: build rozgrzewa cache bez żadnej bazy pod ręką,
+a connection string wklejany do formularza łatwo wkleić bez parametru.
 
 **Co daje pnpm poza szybkością?**
 Brak hoistingu. `node_modules` to dowiązania do jednego store'u, więc pakiet nie widzi

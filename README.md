@@ -84,8 +84,10 @@ cp .env .env.local   # then set DATABASE_URL for your machine
 DATABASE_URL="postgresql://postgres:kickoff@127.0.0.1:5432/kickoff?serverVersion=17&charset=utf8"
 ```
 
-`serverVersion` is not decoration: Doctrine picks its platform from it, and a wrong value
-produces migrations the server rejects or a `migrations:diff` that never comes back empty.
+The major version is what Doctrine picks its platform from, and a wrong value produces
+migrations the server rejects or a `migrations:diff` that never comes back empty. It is
+declared once in `config/packages/doctrine.yaml`, so a connection string without it still
+works — `serverVersion` in the URL overrides that default when you need a different one.
 Check what you actually have with `php bin/console dbal:run-sql "SELECT version()"`.
 
 Then create the schema and the signing keys:
@@ -339,11 +341,14 @@ since deployment waits for green checks, it can never reach production.
 ### First-time setup
 
 **1. A database.** Create a free project at [neon.tech](https://neon.tech) and copy the
-*pooled* connection string. Doctrine needs to know the platform, so append the version:
+*pooled* connection string — paste it as it comes:
 
 ```
-postgresql://USER:PASSWORD@HOST/DB?sslmode=require&serverVersion=17
+postgresql://USER:PASSWORD@HOST/DB?sslmode=require
 ```
+
+Doctrine takes the major version from `config/packages/doctrine.yaml`, so there is nothing to
+append. If Neon ever gives you something other than 17, change it there rather than here.
 
 **2. A signing keypair — a fresh one, not the one in `.env`.**
 
