@@ -4,10 +4,20 @@ declare(strict_types=1);
 
 namespace App\Tests\Api;
 
+use App\Entity\Fixture;
+use App\Entity\MatchEvent;
+use App\Entity\MatchEventType;
 use App\Entity\OrganizationRole;
+use App\Tests\Factory\LeagueFactory;
 use App\Tests\Factory\OrganizationFactory;
 use App\Tests\Factory\OrganizationMembershipFactory;
+use App\Tests\Factory\PlayerFactory;
+use App\Tests\Factory\RosterEntryFactory;
+use App\Tests\Factory\SeasonFactory;
+use App\Tests\Factory\SeasonTeamFactory;
+use App\Tests\Factory\TeamFactory;
 use App\Tests\Factory\UserFactory;
+use Doctrine\ORM\EntityManagerInterface;
 use PHPUnit\Framework\Attributes\DataProvider;
 use Symfony\Component\HttpFoundation\Response;
 
@@ -136,6 +146,43 @@ final class OrganizationApiTest extends ApiTestCase
     {
         $owner = UserFactory::createOne();
         $organization = OrganizationFactory::createOne(['createdBy' => $owner]);
+
+        $this->request('DELETE', '/api/v1/organizations/'.$organization->getId(), null, $this->signIn($owner));
+
+        self::assertResponseStatusCodeSame(Response::HTTP_NO_CONTENT);
+        OrganizationFactory::assert()->count(0, ['id' => $organization->getId()]);
+    }
+
+    /**
+     * The test above deletes an empty organization, which is why it never noticed that a
+     * populated one could not be deleted at all.
+     *
+     * A match event points at its scorer with ON DELETE RESTRICT, on purpose. Cascading from
+     * the organization reaches players and events by two separate paths, and the database is
+     * free to take them in either order — so this used to fail whenever it happened to remove
+     * a player while his goals were still there. Worse, it did not fail every time.
+     */
+    public function testAnOrganizationWithRecordedMatchesCanStillBeDeleted(): void
+    {
+        $owner = UserFactory::createOne();
+        $organization = OrganizationFactory::createOne(['createdBy' => $owner]);
+
+        $league = LeagueFactory::createOne(['organization' => $organization]);
+        $season = SeasonFactory::createOne(['league' => $league, 'name' => '2026']);
+
+        $home = TeamFactory::createOne(['organization' => $organization, 'name' => 'Stal']);
+        $away = TeamFactory::createOne(['organization' => $organization, 'name' => 'Resovia']);
+        $squad = SeasonTeamFactory::createOne(['season' => $season, 'team' => $home]);
+        SeasonTeamFactory::createOne(['season' => $season, 'team' => $away]);
+
+        $scorer = PlayerFactory::createOne(['organization' => $organization]);
+        RosterEntryFactory::createOne(['seasonTeam' => $squad, 'player' => $scorer, 'shirtNumber' => 9]);
+
+        $entityManager = self::getContainer()->get(EntityManagerInterface::class);
+        $fixture = new Fixture($season, $home, $away, 1, 1);
+        $entityManager->persist($fixture);
+        $entityManager->persist(new MatchEvent($fixture, MatchEventType::Goal, 23, $home, $scorer));
+        $entityManager->flush();
 
         $this->request('DELETE', '/api/v1/organizations/'.$organization->getId(), null, $this->signIn($owner));
 

@@ -43,3 +43,41 @@ export function formatTime(value: string | null): string {
 
   return new Date(value).toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })
 }
+
+/**
+ * "3 minutes ago", in the reader's language.
+ *
+ * `Intl.RelativeTimeFormat` rather than a hand-rolled ladder of ifs, because the plural rules
+ * for "2 minutes" are not the same in every language and getting them wrong is the kind of
+ * detail that makes an interface feel translated rather than written.
+ *
+ * The largest unit that fits is chosen, and anything older than a week falls back to a date:
+ * "37 days ago" is arithmetic, not information.
+ */
+const RELATIVE = new Intl.RelativeTimeFormat(undefined, { numeric: 'auto' })
+
+const UNITS: [Intl.RelativeTimeFormatUnit, number][] = [
+  ['second', 1000],
+  ['minute', 60 * 1000],
+  ['hour', 60 * 60 * 1000],
+  ['day', 24 * 60 * 60 * 1000],
+]
+
+export function formatRelative(value: string, now: Date = new Date()): string {
+  const then = new Date(value)
+  const elapsed = now.getTime() - then.getTime()
+
+  if (elapsed >= 7 * UNITS[3][1]) {
+    return DAY.format(then)
+  }
+
+  let chosen: [Intl.RelativeTimeFormatUnit, number] = UNITS[0]
+
+  for (const unit of UNITS) {
+    if (Math.abs(elapsed) >= unit[1]) {
+      chosen = unit
+    }
+  }
+
+  return RELATIVE.format(-Math.round(elapsed / chosen[1]), chosen[0])
+}

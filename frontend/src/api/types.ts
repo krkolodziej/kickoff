@@ -274,6 +274,27 @@ export interface PlayerStatisticsRow {
   red_cards: number
 }
 
+export type NotificationType = 'MATCH_FINISHED' | 'KICK_OFF_REMINDER'
+
+/**
+ * One line in the bell.
+ *
+ * `link` is a path inside this application rather than an absolute URL, so the client routes
+ * to it instead of reloading the page — and so a stored notification does not go stale the
+ * day the host changes.
+ */
+export interface AppNotification {
+  id: number
+  type: NotificationType
+  title: string
+  body: string
+  link: string
+  organization_id: number
+  organization_name: string
+  created_at: string
+  read_at: string | null
+}
+
 /**
  * Collections are paginated only when asked. Without `page` or `page_size` the endpoint
  * answers with a bare array, which is what most screens in this application want — and the

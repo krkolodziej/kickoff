@@ -1,0 +1,48 @@
+framework:
+    messenger:
+        # Anything that exhausts its retries lands here instead of vanishing. Without it a
+        # message that keeps failing is simply gone, and the only trace is a line in a log
+        # nobody reads. With it, `messenger:failed:show` answers "what did we lose".
+        failure_transport: failed
+
+        transports:
+            # Doctrine, not Redis or AMQP, and the reason is transactional rather than
+            # operational: dispatching writes a row through the same connection the
+            # application is already using, so a message sent inside a transaction is
+            # committed or rolled back with it. See MatchLifecycle::transition().
+            #
+            # The price is honest and worth stating: this is a queue in a relational database.
+            # It polls, it does not fan out to other services, and at a few thousand messages
+            # a day that is all fine. A league that needed a hundred thousand would swap the
+            # DSN and give up the transactional guarantee on purpose.
+            async:
+                dsn: '%env(MESSENGER_TRANSPORT_DSN)%'
+                options:
+                    queue_name: async
+                retry_strategy:
+                    # Three attempts, backing off. The failures this protects against are
+                    # transient — a connection dropped mid-handle, a deadlock — and those
+                    # clear in seconds. A permanent failure should reach the failed transport
+                    # quickly rather than be retried for an hour.
+                    max_retries: 3
+                    delay: 1000
+                    multiplier: 3
+
+            failed: 'doctrine://default?queue_name=failed'
+
+        routing:
+            App\Message\MatchFinished: async
+            App\Message\SendKickOffReminders: async
+
+when@test:
+    framework:
+        messenger:
+            transports:
+                # Still Doctrine in tests, not in-memory. The whole reason this transport was
+                # chosen is that its rows take part in the surrounding transaction, and an
+                # in-memory transport cannot show whether that is true. The tests read
+                # `messenger_messages` directly to prove it.
+                async:
+                    dsn: '%env(MESSENGER_TRANSPORT_DSN)%'
+                    options:
+                        queue_name: async

@@ -31,6 +31,32 @@ if [ "${RUN_RELEASE_ON_START:-false}" = "true" ]; then
     php bin/console doctrine:migrations:migrate --no-interaction --allow-no-migration
 fi
 
+# --- background work ---------------------------------------------------------------------
+#
+# The worker runs beside the web server in the same container, because a separate background
+# service is a paid feature and one process is what the free plan gives.
+#
+# The loop is the supervisor. `messenger:consume` is told to stop after an hour — a worker
+# holds the container it booted with, and a long-lived one accumulates memory and stale code
+# — so something has to start it again, and `|| true` keeps a crash from taking the whole
+# container down with it.
+#
+# The honest limitation: a free instance sleeps after fifteen quiet minutes and the worker
+# sleeps with it. Queued work is not lost, because it is rows in a table, and it is picked up
+# on the next wake. But the schedule only advances while somebody is using the application,
+# so a reminder can arrive late. Moving the worker to its own always-on service is the fix,
+# and it costs money rather than code.
+if [ "${RUN_WORKER:-false}" = "true" ]; then
+    echo "worker: consuming async and scheduler_reminders"
+    (
+        while true; do
+            php bin/console messenger:consume async scheduler_reminders \
+                --time-limit=3600 --memory-limit=96M --no-interaction || true
+            sleep 5
+        done
+    ) &
+fi
+
 # --- serve -------------------------------------------------------------------------------
 #
 # A SERVER_NAME with no host is what tells Caddy to serve plain HTTP on that port and skip

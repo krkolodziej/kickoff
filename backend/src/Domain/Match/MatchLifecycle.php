@@ -7,8 +7,10 @@ namespace App\Domain\Match;
 use App\Entity\Fixture;
 use App\Entity\MatchStatus;
 use App\Exception\InvalidTransitionException;
+use App\Message\MatchFinished;
 use Doctrine\ORM\EntityManagerInterface;
 use Psr\Clock\ClockInterface;
+use Symfony\Component\Messenger\MessageBusInterface;
 
 /**
  * Moving a match between states, and the side effects that belong to each move.
@@ -26,6 +28,7 @@ final class MatchLifecycle
     public function __construct(
         private readonly EntityManagerInterface $entityManager,
         private readonly ClockInterface $clock,
+        private readonly MessageBusInterface $bus,
     ) {
     }
 
@@ -62,10 +65,29 @@ final class MatchLifecycle
             throw new InvalidTransitionException($from, $target);
         }
 
-        $fixture->setStatus($target);
-        $this->applySideEffects($fixture, $target);
+        // The state change and the announcement of it go in one transaction, and that is the
+        // point of choosing the Doctrine transport over Redis or AMQP.
+        //
+        // `dispatch` on this transport is an INSERT into `messenger_messages`, on this
+        // connection, inside this transaction. So if the flush below fails — or anything
+        // between here and the commit does — the message disappears with the change it was
+        // announcing. There is no window in which the world has been told about a result the
+        // database does not have.
+        //
+        // A broker outside the database cannot offer that. Sending before the commit risks a
+        // notification about a result that never landed; sending after risks a result nobody
+        // is told about, because the process can die in between. Django solves it with
+        // `transaction.on_commit`; here the transport's own storage solves it structurally.
+        $this->entityManager->wrapInTransaction(function () use ($fixture, $target): void {
+            $fixture->setStatus($target);
+            $this->applySideEffects($fixture, $target);
 
-        $this->entityManager->flush();
+            $this->entityManager->flush();
+
+            if (MatchStatus::Finished === $target) {
+                $this->bus->dispatch(new MatchFinished((int) $fixture->getId()));
+            }
+        });
     }
 
     private function applySideEffects(Fixture $fixture, MatchStatus $target): void

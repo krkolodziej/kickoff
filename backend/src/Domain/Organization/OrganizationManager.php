@@ -4,9 +4,17 @@ declare(strict_types=1);
 
 namespace App\Domain\Organization;
 
+use App\Entity\Fixture;
+use App\Entity\League;
+use App\Entity\MatchEvent;
 use App\Entity\Organization;
 use App\Entity\OrganizationMembership;
 use App\Entity\OrganizationRole;
+use App\Entity\Player;
+use App\Entity\RosterEntry;
+use App\Entity\Season;
+use App\Entity\SeasonTeam;
+use App\Entity\Team;
 use App\Entity\User;
 use App\Exception\ConflictException;
 use App\Exception\OwnerMembershipIsProtectedException;
@@ -84,10 +92,80 @@ final class OrganizationManager
         $this->entityManager->flush();
     }
 
+    /**
+     * Deleting an organization deletes everything inside it, **in an order chosen here**.
+     *
+     * `remove()` on its own is not enough, and the reason is a rule from an earlier stage
+     * doing its job. A match event points at the player who scored with ON DELETE RESTRICT,
+     * deliberately: deleting one player must not quietly erase his goals from the record.
+     *
+     * Cascading from the organization would reach players and events by two different paths
+     * and the database is free to take them in any order — so it sometimes removes a player
+     * while his goals still exist and refuses the whole delete. The failure is not even
+     * reliable, which is worse than a failure that always happens.
+     *
+     * So the children go first, deepest first, in one transaction. The RESTRICT still guards
+     * the case it was written for: one player, deleted on his own, is still refused.
+     */
     public function delete(Organization $organization): void
     {
-        $this->entityManager->remove($organization);
-        $this->entityManager->flush();
+        $this->entityManager->wrapInTransaction(function () use ($organization): void {
+            $seasonIds = $this->seasonIdsOf($organization);
+
+            if ([] !== $seasonIds) {
+                $this->deleteWhereSeasonIn(MatchEvent::class, 'e', 'e.fixture IN (SELECT f.id FROM '.Fixture::class.' f WHERE f.season IN (:seasons))', $seasonIds);
+                $this->deleteWhereSeasonIn(Fixture::class, 'f', 'f.season IN (:seasons)', $seasonIds);
+                $this->deleteWhereSeasonIn(RosterEntry::class, 'r', 'r.seasonTeam IN (SELECT st.id FROM '.SeasonTeam::class.' st WHERE st.season IN (:seasons))', $seasonIds);
+                $this->deleteWhereSeasonIn(SeasonTeam::class, 'st', 'st.season IN (:seasons)', $seasonIds);
+                $this->deleteWhereSeasonIn(Season::class, 's', 's.id IN (:seasons)', $seasonIds);
+            }
+
+            foreach ([League::class, Player::class, Team::class] as $entity) {
+                $this->entityManager->createQueryBuilder()
+                    ->delete($entity, 'x')
+                    ->where('x.organization = :organization')
+                    ->setParameter('organization', $organization)
+                    ->getQuery()
+                    ->execute();
+            }
+
+            // Memberships and notifications hang off the organization directly and cascade
+            // cleanly, so the row itself can go last through the ORM.
+            $this->entityManager->remove($organization);
+            $this->entityManager->flush();
+        });
+    }
+
+    /**
+     * @return list<int>
+     */
+    private function seasonIdsOf(Organization $organization): array
+    {
+        /** @var list<array{id: int}> $rows */
+        $rows = $this->entityManager->createQueryBuilder()
+            ->select('s.id AS id')
+            ->from(Season::class, 's')
+            ->innerJoin('s.league', 'l')
+            ->where('l.organization = :organization')
+            ->setParameter('organization', $organization)
+            ->getQuery()
+            ->getArrayResult();
+
+        return array_map(static fn (array $row): int => (int) $row['id'], $rows);
+    }
+
+    /**
+     * @param class-string $entity
+     * @param list<int>    $seasonIds
+     */
+    private function deleteWhereSeasonIn(string $entity, string $alias, string $where, array $seasonIds): void
+    {
+        $this->entityManager->createQueryBuilder()
+            ->delete($entity, $alias)
+            ->where($where)
+            ->setParameter('seasons', $seasonIds)
+            ->getQuery()
+            ->execute();
     }
 
     /**

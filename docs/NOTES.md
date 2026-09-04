@@ -78,6 +78,15 @@ dokumentu rośnie z każdym etapem.
   - [6.7 Determinizm i idempotencja](#67-determinizm-i-idempotencja)
   - [6.8 Pułapki Stage 6](#68-pułapki-stage-6)
   - [Pytania na rozmowę](#pytania-na-rozmowę--stage-6)
+- [Stage 7 — Messenger, powiadomienia i harmonogram](#stage-7--messenger-powiadomienia-i-harmonogram)
+  - [7.1 Transport w bazie, i po co](#71-transport-w-bazie-i-po-co)
+  - [7.2 Wiadomość niesie identyfikator](#72-wiadomość-niesie-identyfikator)
+  - [7.3 „Co najmniej raz" i klucz deduplikacji](#73-co-najmniej-raz-i-klucz-deduplikacji)
+  - [7.4 Handler musi znieść, że świat się zmienił](#74-handler-musi-znieść-że-świat-się-zmienił)
+  - [7.5 Harmonogram w kodzie, nie w cronie](#75-harmonogram-w-kodzie-nie-w-cronie)
+  - [7.6 Worker: Windows i produkcja](#76-worker-windows-i-produkcja)
+  - [7.7 Pułapki Stage 7](#77-pułapki-stage-7)
+  - [Pytania na rozmowę](#pytania-na-rozmowę--stage-7)
 - [Wdrożenie](#wdrożenie)
   - [D.1 Dlaczego PostgreSQL](#d1-dlaczego-postgresql)
   - [D.2 Co znalazła zmiana bazy](#d2-co-znalazła-zmiana-bazy)
@@ -1492,6 +1501,209 @@ repozytorium to stałe hasło wszędzie, gdzie tę komendę odpalono.
 
 ---
 
+## Stage 7 — Messenger, powiadomienia i harmonogram
+
+### 7.1 Transport w bazie, i po co
+
+Kolejka stoi na transporcie **Doctrine**, nie na Redisie ani AMQP. Powód nie jest operacyjny,
+tylko transakcyjny i jest wart wyłożenia w całości, bo to najciekawsza rzecz w tym etapie.
+
+`dispatch()` na tym transporcie to `INSERT` do `messenger_messages` — **na tym samym
+połączeniu**, wewnątrz tej samej transakcji, co zmiana, którą wiadomość ogłasza. W efekcie:
+
+```php
+$this->entityManager->wrapInTransaction(function () use ($fixture, $target): void {
+    $fixture->setStatus($target);
+    $this->entityManager->flush();
+
+    if (MatchStatus::Finished === $target) {
+        $this->bus->dispatch(new MatchFinished((int) $fixture->getId()));
+    }
+});
+```
+
+Jeśli cokolwiek między tym `flush()` a zatwierdzeniem transakcji padnie, **wiadomość znika
+razem z wynikiem, który ogłaszała**. Nie ma okna, w którym świat został poinformowany o
+rezultacie, którego baza nie ma.
+
+Broker poza bazą tego nie potrafi. Wysyłka przed commitem grozi powiadomieniem o wyniku, który
+nigdy nie wylądował; wysyłka po commicie grozi wynikiem, o którym nikt się nie dowie, bo proces
+umarł w międzyczasie. Django rozwiązuje to osobnym mechanizmem — `transaction.on_commit`; tutaj
+rozwiązuje to samo miejsce przechowywania kolejki, **strukturalnie**.
+
+Twierdzenie tej rangi nie może zostać w komentarzu, więc `MessengerTransactionTest` sprawdza
+je z obu stron: commit zostawia wiersz, rollback go zabiera — czytając `messenger_messages`
+wprost, a nie pytając Messengera, co jego zdaniem zrobił.
+
+Cena jest uczciwa i warto ją nazwać: to kolejka w relacyjnej bazie. Odpytuje ją, nie rozgłasza
+do innych usług, i przy kilku tysiącach wiadomości dziennie to bez znaczenia. Liga, która
+potrzebowałaby stu tysięcy, podmieniłaby DSN i **świadomie oddała** tę gwarancję.
+
+### 7.2 Wiadomość niesie identyfikator
+
+`MatchFinished` ma jedno pole: `int $fixtureId`. Nigdy encji.
+
+Dwa powody, oba praktyczne. Wiadomość jest serializowana do wiersza i odczytywana później,
+możliwe że przez proces, który wystartował po zakończeniu tego, który ją wysłał — a encja
+Doctrine niesie proxy i mapę tożsamości, które w tamtym procesie nic nie znaczą. Drugi: zanim
+wiadomość zostanie obsłużona, wiersz mógł się zmienić albo zniknąć, a przewożenie migawki
+pozwoliłoby handlerowi zadziałać na meczu, który już tak nie wygląda — po cichu.
+
+Wiadomość mówi więc, **co się stało i któremu wierszowi**; handler czyta prawdę sam.
+
+### 7.3 „Co najmniej raz" i klucz deduplikacji
+
+Kolejka obiecuje dostarczenie **co najmniej raz**, nie dokładnie raz. Worker, który umrze
+między wykonaniem pracy a potwierdzeniem wiadomości, dostanie ją ponownie. To nie jest usterka
+do naprawienia — to jest kontrakt.
+
+Odpowiedzią jest kolumna `dedupe_key` z unikalnym indeksem i trzy mechanizmy, z których **żaden
+sam nie wystarcza**:
+
+1. **Klucz opisuje fakt, nie dostarczenie.** `MATCH_FINISHED:41:7` znaczy „użytkownik 7 został
+   powiadomiony o meczu 41". Ponowne wykonanie handlera policzy ten sam klucz. Celowo nie ma w
+   nim znacznika czasu ani identyfikatora wiadomości — te zmieniają się między dostarczeniami
+   tego samego faktu, czyli robią dokładnie to, czego klucz robić nie może.
+2. **Unikalny indeks.** Jedyna część, której nie da się przegrać w wyścigu. Dwa workery
+   obsługujące tę samą wiadomość w tej samej chwili przejdą sprawdzenie z punktu 3; baza
+   pozwoli wygrać dokładnie jednemu.
+3. **Sprawdzenie przed zapisem.** Nie gwarancja — gwarancją jest indeks — ale zamienia
+   przypadek typowy (ponowne dostarczenie po sekundach lub godzinach) w jedno zapytanie i zero
+   zapisów, zamiast w nieudaną transakcję i ponowienie.
+
+Gdy wyścig faktycznie zajdzie, `flush()` rzuci, wiadomość zostanie ponowiona, a przy ponowieniu
+punkt 3 znajdzie wszystkie klucze i nie zrobi nic. **Awaria rozwiązuje się sama.**
+
+### 7.4 Handler musi znieść, że świat się zmienił
+
+Każdy wczesny powrót w `MatchFinishedHandler` opisuje sytuację, która wystąpi:
+
+```php
+if (null === $fixture) return;                                  // sezon skasowany
+if (MatchStatus::Finished !== $fixture->getStatus()) return;    // mecz cofnięty i odwołany
+```
+
+Rzucenie wyjątkiem wysłałoby wiadomość na transport `failed` i poprosiło człowieka o obejrzenie
+czegoś, co po prostu **przestało być prawdą**. To nie błąd — to upływ czasu.
+
+Pokazane, a nie tylko opisane: po odbudowie danych demonstracyjnych w kolejce zostało 148
+wiadomości, z czego połowa wskazywała na mecze usunięte przez `--flush`. Worker skonsumował
+wszystkie, utworzył 74 powiadomienia i po pozostałych 74 nie został ślad.
+
+### 7.5 Harmonogram w kodzie, nie w cronie
+
+`#[AsSchedule('reminders')]` z `RecurringMessage::every('15 minutes', …)`.
+
+Co to daje ponad wpis w crontabie: leży w repozytorium, jest przeglądane razem z kodem, który
+uruchamia, wdraża się razem z nim i jest identyczne na każdej maszynie. Linia crontaba żyje na
+jednym serwerze, edytuje ją ten, kto ma tam powłokę, i odkrywa się jej brak wtedy, gdy
+przypomnienia przestają przychodzić.
+
+Co kosztuje: musi chodzić proces. Jeśli nie chodzi, nic się nie odpala — ta sama awaria co
+zatrzymany demon crona, tylko łatwiejsza do przeoczenia, bo nie wygląda na infrastrukturę.
+
+**Okno ±15 minut** wokół „za dobę" jest dobrane do częstotliwości harmonogramu, żeby każdy mecz
+wpadł dokładnie w jeden przebieg. Szersze — mecze przypominane dwa razy, co klucz deduplikacji
+wchłonie, ale **po cichu**, ukrywając pomyłkę. Węższe — przebieg spóźniony o kilkanaście sekund
+gubi mecze całkowicie, a tego nie wchłonie nic.
+
+Ta sama logika siedzi w komendzie `app:matches:remind`, **tym samym obiektem**, nie kopią. Gdy
+przypomnienia przestaną przychodzić, pierwsze pytanie brzmi „skan zepsuty czy worker nie
+chodzi" — komenda odpowiada w jednej linii. Dwie implementacje rozjechałyby się, a rozjechałaby
+się ta, której nikt nie uruchamia.
+
+### 7.6 Worker: Windows i produkcja
+
+**Lokalnie.** `messenger:consume` obsługuje sygnał zatrzymania przez `ext-pcntl`, którego na
+Windowsie nie ma. Stąd `--time-limit`: bez niego jedynym sposobem na zatrzymanie workera jest
+zabicie go, możliwie w połowie obsługi wiadomości. Druga uciążliwość: worker trzyma kontener, z
+którym wystartował, więc **serwuje kod, który już zmieniłeś**. `messenger:stop-workers` kończy
+go wcześniej, a `dev.ps1` uruchamia go razem z resztą — bo nic nie ostrzeże, że go brakuje:
+wyniki się zapisują, dzwonek po prostu zostaje pusty.
+
+**Na produkcji.** Osobna usługa workera to na Renderze plan płatny, więc worker chodzi w tym
+samym kontenerze, obok serwera, uruchamiany z entrypointu w pętli, która go restartuje.
+
+Ograniczenie warto nazwać wprost: darmowa instancja zasypia po kwadransie ciszy i worker zasypia
+z nią. Zakolejkowana praca nie ginie — to wiersze w tabeli, odebrane przy następnym wybudzeniu —
+ale **harmonogram posuwa się tylko wtedy, gdy ktoś korzysta z aplikacji**, więc przypomnienie
+może przyjść spóźnione. Naprawa to osobna usługa zawsze włączona, czyli koszt, nie kod.
+
+### 7.7 Pułapki Stage 7
+
+**Usuwanie organizacji było zepsute od Stage 2.** `remove($organization)` zdawało się na kaskady
+bazy, a zdarzenie meczowe wskazuje na strzelca z `ON DELETE RESTRICT` — celowo, żeby skasowanie
+zawodnika nie wymazało jego goli. Kaskada dociera do zawodników i zdarzeń **dwiema różnymi
+ścieżkami**, a baza może je wziąć w dowolnej kolejności, więc usunięcie czasem kasowało
+zawodnika, gdy jego gole jeszcze istniały, i odrzucało całość. Gorzej: nie zawsze. Istniejący
+test kasował organizację **pustą**, więc niczego nie widział.
+
+Poprawka porządkuje kasowanie dzieci od najgłębszych, w jednej transakcji; `RESTRICT` dalej
+broni przypadku, dla którego powstał. Nowy test sprawdzony przez chwilowe przywrócenie starej
+implementacji — bez poprawki daje 500 z naruszeniem klucza obcego.
+
+**Moja weryfikacja determinizmu w Stage 6 była nieważna.** Grepowałem wtedy linię, której w
+wyjściu nie było, `--flush` przerywał się na tym samym błędzie klucza obcego, organizacja nie
+znikała — i tabela wychodziła „identyczna", bo porównywałem dane same ze sobą. Powtórzone
+poprawnie: maksymalne `id` meczu zmieniło się z 264 na 396, co dowodzi przebudowy, a tabela
+wróciła identyczna.
+
+**DQL nie wybierze samego aliasu z JOIN-a.** `SELECT u FROM OrganizationMembership m JOIN m.user u`
+to błąd semantyczny, nie skrót. Zapytanie trzeba zbudować od encji, o którą naprawdę chodzi.
+
+**Asercja na słowie jest asercją o ustawieniach maszyny.** Test `formatRelative` sprawdzał
+`/minute/` i padał, bo `Intl` sformatował „3 minuty temu". Testowana jest **decyzja o jednostce
+i liczbie**, a nie renderowanie zdania — więc oczekiwanie buduje się z tej samej pary, nie z
+frazy.
+
+**PHPStan i wygenerowany `config/reference.php`.** Ten plik deklaruje alias typu wymieniający po
+jednej klasie konfiguracyjnej na włączony bundle, a te powstają per środowisko w
+`var/cache/<env>/Symfony/Config`. Analiza przechodziła lub nie w zależności od tego, które cache
+były rozgrzane — i nie doszedłem, czym dokładnie różni się od tego CI, gdzie zawsze było
+zielono. Zamiast gonić różnicę wykluczyłem plik z analizy: to generowana pomoc dla IDE, nie kod
+aplikacji, a check, którego wynik zależy od stanu cache'u, odpowiada na pytanie, którego nikt
+nie zadał.
+
+**Fabryka organizacji sama nadaje właściciela.** Dopisanie członkostwa OWNER w teście kończy się
+naruszeniem unikalności — organizacja bez właściciela to wiersz, którego fabryka nie produkuje.
+
+### Pytania na rozmowę — Stage 7
+
+**Dlaczego kolejka stoi w bazie, a nie w Redisie?**
+Bo `dispatch()` jest wtedy `INSERT`-em na tym samym połączeniu, więc wiadomość jest zatwierdzana
+albo wycofywana razem ze zmianą, którą ogłasza. Broker poza bazą wymusza wybór: wysłać przed
+commitem i ryzykować powiadomienie o czymś, co nie wylądowało, albo po commicie i ryzykować
+zmianę, o której nikt się nie dowie. Cena to kolejka, która odpytuje i nie skaluje się dowolnie
+— świadomie zapłacona przy tej wielkości.
+
+**Co znaczy, że kolejka gwarantuje „co najmniej raz", i jak się z tym żyje?**
+Że handler zostanie wywołany ponownie, jeśli worker padnie między wykonaniem pracy a
+potwierdzeniem. Żyje się z tym, czyniąc handler idempotentnym: klucz opisujący fakt, unikalny
+indeks jako jedyna niepodrabialna gwarancja, i sprawdzenie przed zapisem, żeby typowy przypadek
+nie kosztował nieudanej transakcji.
+
+**Dlaczego wiadomość niesie id, a nie encję?**
+Bo jest serializowana i czytana później, możliwie przez inny proces, w którym proxy i mapa
+tożsamości Doctrine nic nie znaczą — a przede wszystkim dlatego, że wiersz mógł się w
+międzyczasie zmienić. Migawka pozwoliłaby zadziałać na stanie, którego już nie ma.
+
+**Handler znajduje mecz, który nie jest już zakończony. Rzucić czy wyjść?**
+Wyjść. Rzucenie wysyła wiadomość na transport `failed` i prosi człowieka o obejrzenie czegoś,
+co po prostu przestało być prawdą. Wyjątki są od rzeczy, które da się naprawić ponowieniem;
+upływ czasu do nich nie należy.
+
+**Skąd wzięło się okno ±15 minut?**
+Z częstotliwości harmonogramu. Ma być dokładnie tak szerokie, żeby każdy mecz wpadł w jeden
+przebieg i żaden w dwa. Szersze chowa pomyłkę za kluczem deduplikacji, węższe gubi mecze przy
+przebiegu spóźnionym o kilkanaście sekund.
+
+**Po co komenda, skoro jest harmonogram?**
+Żeby dało się odróżnić „skan jest zepsuty" od „worker nie chodzi" bez czekania kwadransa. I to
+musi być ten sam obiekt, nie kopia logiki — dwie implementacje rozjadą się, a rozjedzie się ta,
+której nikt nie uruchamia.
+
+---
+
 ## Wdrożenie
 
 ### D.1 Dlaczego PostgreSQL
@@ -1837,6 +2049,12 @@ Tabela rośnie z każdym etapem.
 | tabela wyliczana w `services/standings.py` | serwis kompozycyjny + czysta klasa reguł | `src/Domain/Standings/StandingsCalculator.php` |
 | `BaseCommand` w `management/commands/` | `#[AsCommand]` + `SymfonyStyle` | `src/Command/SeedDemoCommand.php` |
 | `random.seed(...)` w seedzie | `Randomizer` na `Mt19937` z ustalonym ziarnem | `src/Command/SeedDemoCommand.php` |
+| `transaction.on_commit(...)` | dispatch przez transport Doctrine w otwartej transakcji | `src/Domain/Match/MatchLifecycle.php` |
+| zadanie Celery + `@shared_task` | `Message` + `#[AsMessageHandler]` | `src/MessageHandler/MatchFinishedHandler.php` |
+| Celery Beat / `CELERY_BEAT_SCHEDULE` | `#[AsSchedule]` + `RecurringMessage::every()` | `src/Schedule/ReminderSchedule.php` |
+| `celery worker` | `messenger:consume` z `--time-limit` | `dev.ps1`, `docker-entrypoint.sh` |
+| martwe zadania w `django-celery-results` | `failure_transport` + `messenger:failed:show` | `config/packages/messenger.yaml` |
+| `get_or_create(dedupe_key=...)` | unikalny indeks + sprawdzenie przed zapisem | `src/Domain/Notification/Notifier.php` |
 | `transaction.atomic()` wokół zdarzenia i wyniku | `EntityManager::wrapInTransaction()` | `src/Domain/Match/MatchEventRecorder.php` |
 | `django.utils.timezone.now()` | `Psr\Clock\ClockInterface` (podmienialny na `MockClock`) | `src/Domain/Match/MatchLifecycle.php` |
 | `TextChoices` + `ALLOWED_TRANSITIONS` w serwisie | metoda na backed enumie | `src/Entity/MatchStatus.php` |
