@@ -238,6 +238,43 @@ export interface PlayerPayload {
 }
 
 /**
+ * One line of the league table.
+ *
+ * Nothing here is stored on the server either: every number is derived from finished matches
+ * on each request, so the table cannot disagree with the results behind it.
+ */
+export interface StandingRow {
+  position: number
+  team_id: number
+  team_name: string
+  played: number
+  won: number
+  drawn: number
+  lost: number
+  goals_for: number
+  goals_against: number
+  goal_difference: number
+  points: number
+}
+
+/**
+ * One player's season.
+ *
+ * Counted from match events, and from matches that are being played as well as finished ones
+ * — a goal scored in the second half is a goal. The table waits for full time; this does not.
+ */
+export interface PlayerStatisticsRow {
+  player_id: number
+  first_name: string
+  last_name: string
+  team_id: number
+  team_name: string
+  goals: number
+  yellow_cards: number
+  red_cards: number
+}
+
+/**
  * Collections are paginated only when asked. Without `page` or `page_size` the endpoint
  * answers with a bare array, which is what most screens in this application want — and the
  * type says so, rather than pretending every list is an envelope.

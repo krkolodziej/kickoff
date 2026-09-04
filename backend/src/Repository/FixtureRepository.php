@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Repository;
 
+use App\Domain\Standings\SideAggregate;
 use App\Entity\Fixture;
 use App\Entity\MatchStatus;
 use App\Entity\OrganizationRole;
@@ -124,5 +125,68 @@ class FixtureRepository extends ServiceEntityRepository
             ->setParameter('season', $season)
             ->getQuery()
             ->execute();
+    }
+
+    /**
+     * Every club's results in a season, as two rows per club.
+     *
+     * A fixture stores one club in `home_team_id` and the other in `away_team_id`, so a single
+     * GROUP BY can only ever see a club from one side of the pitch. There is no way to ask for
+     * "this club's season" in one grouped query without a UNION, which DQL does not have, so
+     * the season arrives as a home-side pass and an away-side pass and is added up in PHP.
+     *
+     * Only FINISHED counts. Points are awarded at full time, not while a match is running.
+     *
+     * @return list<SideAggregate>
+     */
+    public function seasonAggregates(Season $season): array
+    {
+        return [
+            ...$this->aggregateOneSide($season, home: true),
+            ...$this->aggregateOneSide($season, home: false),
+        ];
+    }
+
+    /**
+     * @return list<SideAggregate>
+     */
+    private function aggregateOneSide(Season $season, bool $home): array
+    {
+        $side = $home ? 'homeTeam' : 'awayTeam';
+        $mine = $home ? 'f.homeScore' : 'f.awayScore';
+        $theirs = $home ? 'f.awayScore' : 'f.homeScore';
+
+        /** @var list<array{teamId: int|string, played: int|string, won: int|string, drawn: int|string, lost: int|string, goalsFor: int|string|null, goalsAgainst: int|string|null}> $rows */
+        $rows = $this->createQueryBuilder('f')
+            ->select(\sprintf('IDENTITY(f.%s) AS teamId', $side))
+            ->addSelect('COUNT(f.id) AS played')
+            ->addSelect(\sprintf('SUM(CASE WHEN %s > %s THEN 1 ELSE 0 END) AS won', $mine, $theirs))
+            ->addSelect(\sprintf('SUM(CASE WHEN %s = %s THEN 1 ELSE 0 END) AS drawn', $mine, $theirs))
+            ->addSelect(\sprintf('SUM(CASE WHEN %s < %s THEN 1 ELSE 0 END) AS lost', $mine, $theirs))
+            ->addSelect(\sprintf('SUM(%s) AS goalsFor', $mine))
+            ->addSelect(\sprintf('SUM(%s) AS goalsAgainst', $theirs))
+            ->where('f.season = :season')
+            ->andWhere('f.status = :finished')
+            ->groupBy(\sprintf('f.%s', $side))
+            ->setParameter('season', $season)
+            ->setParameter('finished', MatchStatus::Finished)
+            ->getQuery()
+            ->getArrayResult();
+
+        // Every aggregate arrives as a string: PostgreSQL returns COUNT and SUM as bigint, and
+        // PHP has no 64-bit integer type in the driver, so the value is handed over as text.
+        // Casting here rather than at the point of use keeps the arithmetic honest.
+        return array_map(
+            static fn (array $row): SideAggregate => new SideAggregate(
+                teamId: (int) $row['teamId'],
+                played: (int) $row['played'],
+                won: (int) $row['won'],
+                drawn: (int) $row['drawn'],
+                lost: (int) $row['lost'],
+                goalsFor: (int) $row['goalsFor'],
+                goalsAgainst: (int) $row['goalsAgainst'],
+            ),
+            $rows,
+        );
     }
 }

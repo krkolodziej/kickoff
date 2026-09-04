@@ -49,6 +49,14 @@ export const qk = {
   fixture: (organizationId: number, leagueId: number, seasonId: number, fixtureId: number) =>
     [...qk.fixtures(organizationId, leagueId, seasonId), fixtureId] as const,
 
+  // Both hang off the season key, so finishing a match invalidates the table and the scorer
+  // list along with everything else under that season — one call, no list to keep in step.
+  standings: (organizationId: number, leagueId: number, seasonId: number) =>
+    [...qk.season(organizationId, leagueId, seasonId), 'standings'] as const,
+
+  playerStatistics: (organizationId: number, leagueId: number, seasonId: number) =>
+    [...qk.season(organizationId, leagueId, seasonId), 'statistics'] as const,
+
   matchEvents: (organizationId: number, leagueId: number, seasonId: number, fixtureId: number) =>
     [...qk.fixture(organizationId, leagueId, seasonId, fixtureId), 'events'] as const,
 } as const

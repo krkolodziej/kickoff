@@ -65,8 +65,11 @@ export function SeasonPage() {
 
       <Tabs
         tabs={[
+          { to: `${base}/overview`, label: 'Overview' },
           { to: `${base}/squads`, label: 'Clubs & squads' },
           { to: `${base}/fixtures`, label: 'Calendar' },
+          { to: `${base}/table`, label: 'Table' },
+          { to: `${base}/statistics`, label: 'Statistics' },
         ]}
       />
 

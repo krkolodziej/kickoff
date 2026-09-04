@@ -114,4 +114,33 @@ class SeasonTeamRepository extends ServiceEntityRepository
     {
         return null !== $this->findOneBy(['season' => $season, 'team' => $team]);
     }
+
+    /**
+     * The clubs registered for a season, as `team id => name`.
+     *
+     * Only the two columns the table needs. `findForSeason` hydrates entities and their squad
+     * counts, which is the right shape for the clubs page and the wrong one for a league
+     * table that will discard everything but the name.
+     *
+     * @return array<int, string>
+     */
+    public function namesForSeason(Season $season): array
+    {
+        /** @var list<array{id: int|string, name: string}> $rows */
+        $rows = $this->createQueryBuilder('st')
+            ->select('t.id AS id', 't.name AS name')
+            ->innerJoin('st.team', 't')
+            ->where('st.season = :season')
+            ->setParameter('season', $season)
+            ->getQuery()
+            ->getArrayResult();
+
+        $names = [];
+
+        foreach ($rows as $row) {
+            $names[(int) $row['id']] = $row['name'];
+        }
+
+        return $names;
+    }
 }

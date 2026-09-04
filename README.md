@@ -10,6 +10,9 @@ disagree with one another.
 
 **Symfony 7.4 LTS** REST API + **React 19** single-page application.
 
+**[kickoff-bv2q.onrender.com](https://kickoff-bv2q.onrender.com)** — the free instance
+sleeps after fifteen quiet minutes, so the first request after a lull takes about a minute.
+
 ---
 
 ## Status
@@ -149,6 +152,25 @@ pnpm run test
 pnpm run lint
 pnpm exec tsc -b
 ```
+
+### A league to look at
+
+```bash
+cd backend
+php bin/console app:seed:demo
+```
+
+Twelve clubs, full squads, a generated calendar and thirteen rounds already played — including
+one match still in progress, one cancelled and two postponed, so every state on the screen has
+something behind it. The command prints the account it created and a password to sign in with.
+
+It is deterministic: the same seed produces the same league on every machine, which is what
+makes the table checkable against the results. It is also idempotent — run it twice and the
+second run does nothing. Pass `--flush` to build it again from scratch.
+
+Nothing is written straight into the score columns. Every match is started, its goals recorded
+one at a time and then finished, through the same services the API uses, so the demo exercises
+the domain rules rather than going around them.
 
 The test suite uses a separate database (`kickoff_test`, from `dbname_suffix`) and builds it
 by running the real migrations, so a migration that no longer applies fails the suite rather
@@ -311,7 +333,7 @@ straight back out.
 | 3b | Seasons, squad registration, rosters | ✅ |
 | 4 | Round-robin fixture generation | ✅ |
 | 5 | Matches, the state machine, goals and cards | ✅ |
-| 6 | Standings, player statistics, demo data | |
+| 6 | Standings, player statistics, demo data | ✅ |
 | 7 | Messenger, notifications, scheduled reminders | |
 | 8 | Realtime match updates, hardening | |
 
