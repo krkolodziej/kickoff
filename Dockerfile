@@ -28,6 +28,21 @@ FROM dunglas/frankenphp:php8.2 AS runtime
 # install-php-extensions ships with the image and resolves the build dependencies itself.
 RUN install-php-extensions pdo_pgsql intl zip opcache
 
+# The base image grants the binary `cap_net_bind_service` as a *file capability*, so it can
+# bind port 80 without running as root. A platform that starts containers with a reduced
+# capability bounding set cannot honour that, and the kernel will not execve a binary carrying
+# an effective file capability it cannot grant: EPERM, which the shell reports as "Operation
+# not permitted" and the platform as exit 126.
+#
+# Nothing here listens below port 1024 — Caddy binds $PORT — so the capability buys nothing.
+# The assertion is on the end state rather than on the removal, because what matters is that
+# the binary carries no capabilities, not that this particular layer was the one to drop them.
+RUN setcap -r /usr/local/bin/frankenphp 2>/dev/null || true; \
+    if getcap /usr/local/bin/frankenphp | grep -q .; then \
+        echo "frankenphp still carries file capabilities" >&2; \
+        exit 1; \
+    fi
+
 COPY --from=composer/composer:2-bin /composer /usr/bin/composer
 
 ENV APP_ENV=prod \

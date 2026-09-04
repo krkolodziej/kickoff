@@ -7,6 +7,11 @@ doctrine:
         # `cache:warmup` runs at image build time with no database to ask, and a connection
         # string pasted into a hosting form is easy to paste without the parameter. A
         # `serverVersion` in the URL still overrides this.
+        #
+        # The exact number matters less than having one: DBAL 4 keeps a single cutoff at 12,
+        # so every server from 12 upwards gets the same platform and the same SQL. This says
+        # what the project is developed and tested against; the managed database may be a
+        # release or two ahead without any of it changing.
         server_version: '17'
 
         profiling_collect_backtrace: '%kernel.debug%'

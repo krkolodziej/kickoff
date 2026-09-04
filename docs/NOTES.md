@@ -77,6 +77,8 @@ dokumentu rośnie z każdym etapem.
   - [D.6 Deploy dopiero po zielonych checkach](#d6-deploy-dopiero-po-zielonych-checkach)
   - [D.7 Jeden menedżer pakietów](#d7-jeden-menedżer-pakietów)
   - [D.8 Wersja serwera to konfiguracja](#d8-wersja-serwera-to-konfiguracja)
+  - [D.9 Connection string nie jest przenośny](#d9-connection-string-nie-jest-przenośny)
+  - [D.10 Pierwszy deploy: dwie usterki](#d10-pierwszy-deploy-dwie-usterki)
   - [Pytania na rozmowę](#pytania-na-rozmowę--wdrożenie)
 - [Django → Symfony](#django--symfony)
 
@@ -1488,6 +1490,92 @@ nic nie tracimy.
 Przy okazji krok warmupu w buildzie stał się testem tej decyzji: leci z gołym URL-em, więc
 gdyby domyślna wersja zniknęła, obraz przestałby się budować.
 
+### D.9 Connection string nie jest przenośny
+
+Neon daje gotowy string do skopiowania. Wklejony do `dbal:run-sql` lokalnie nie zadziałał:
+
+```
+SQLSTATE[08006] ERROR: Endpoint ID is not specified. Either please upgrade the postgres
+client library (libpq) for SNI support or pass the endpoint ID ... '?options=endpoint%3D<id>'
+```
+
+Neon trzyma tysiące baz pod jednym adresem i rozróżnia je po **SNI** — rozszerzeniu TLS, w
+którym klient podaje nazwę hosta jeszcze przed zestawieniem szyfrowanego kanału. libpq umie to
+od wersji 14; ta w XAMPP-ie jest starsza, więc serwer nie wie, którą bazę otworzyć.
+
+Podpowiedziane w błędzie `?options=endpoint=...` **nie przechodzi przez Doctrine**. DBAL nie
+przekazuje query stringa do sterownika, tylko składa DSN z zamkniętej listy kluczy
+(`vendor/doctrine/dbal/src/Driver/PDO/PgSQL/Driver.php`): host, port, dbname, `sslmode`,
+certyfikaty, `application_name`, `gssencmode`. Wszystko poza tą listą — `options`,
+`channel_binding` — jest po cichu ignorowane. Warto to wiedzieć, zanim się doda parametr i
+uzna, że działa.
+
+Zadziałało `PGOPTIONS=endpoint=ep-...` w środowisku, bo tę zmienną czyta samo libpq, poniżej
+Doctrine. Obejście jest potrzebne wyłącznie przy starym kliencie — obraz produkcyjny stoi na
+Debianie z libpq 15+, który SNI wysyła sam.
+
+Dwie rzeczy przy okazji:
+
+**Procenty w `DATABASE_URL`.** Drugie obejście Neona to wpisanie endpointu w pole hasła. Nie
+da się: `%3D` w wartości zmiennej środowiskowej Symfony bierze za placeholder parametru
+(`env(resolve:...)`) i wywala się na „non-existent parameter". Znak procenta w tej zmiennej
+trzeba by podwoić.
+
+**Baza mówi, co naprawdę ma.** `SELECT version()` na Neonie zwrócił PostgreSQL **18.6**, choć
+lokalnie i w CI stoi 17. Bez znaczenia — DBAL 4 ma jeden próg na 12 — ale to jest ta klasa
+rozbieżności, o której lepiej wiedzieć z zapytania niż z założenia.
+
+### D.10 Pierwszy deploy: dwie usterki
+
+**1. `exec: frankenphp: Operation not permitted`, wyjście 126.**
+
+Kontener zbudował się i wystartował, po czym padł na ostatniej linii entrypointu. Wyjście 126
+znaczy „znalezione, ale nie da się uruchomić" — w odróżnieniu od 127, czyli „nie znalezione".
+Skoro sam entrypoint się wykonał, odpadał bit wykonywalności i znaki końca linii; problem był
+w tym, co entrypoint próbował uruchomić.
+
+Winne okazały się **file capabilities**. Obraz FrankenPHP nadaje binarce:
+
+```
+setcap cap_net_bind_service=+ep /usr/local/bin/frankenphp
+```
+
+żeby serwer mógł zająć port 80 bez bycia rootem. Uprawnienie siedzi w atrybucie rozszerzonym
+pliku, a `+e` znaczy „efektywne". Gdy platforma uruchamia kontener z **obciętym zbiorem
+ograniczającym** (capability bounding set), jądro nie ma jak tego uprawnienia przyznać — i
+odmawia samego `execve`, zwracając `EPERM`. Nie „program wystartował i nie mógł otworzyć
+portu", tylko „program w ogóle się nie uruchomił".
+
+Nasz serwer słucha na `$PORT`, czyli 8080. Uprawnienie do portów uprzywilejowanych jest tu
+martwym balastem, więc znika w Dockerfile. Asercja sprawdza **stan końcowy**, a nie samo
+usunięcie — liczy się to, że binarka nie niesie uprawnień, nie to, która warstwa je zdjęła.
+
+**Dlaczego CI tego nie złapało** — a przecież job `Production image` uruchamia kontener i pyta
+go o zdrowie. Bo runner GitHuba daje kontenerowi **domyślny** zestaw capabilities, w którym
+`cap_net_bind_service` jest. `exec` przechodził, health check odpowiadał, wszystko zielone.
+Stąd poprawka w CI: `--cap-drop=ALL` przy `docker run`. To ostrzej niż jakakolwiek platforma,
+więc ta klasa błędu ląduje teraz w pull requeście.
+
+Morał ogólniejszy: **test, który jest łagodniejszy od produkcji, daje fałszywe poczucie
+bezpieczeństwa.** Uruchomienie kontenera to za mało; trzeba go uruchomić w warunkach co
+najmniej tak ciasnych jak docelowe.
+
+**2. `render.yaml` w ogóle nie został przeczytany.**
+
+Usługa powstała jako zwykły Web Service z repozytorium, a nie jako **Blueprint**. Render czyta
+`render.yaml` wyłącznie w tym drugim trybie. Skutki były widoczne dopiero po zajrzeniu w
+ustawienia: zero zmiennych środowiskowych, brak `healthCheckPath`, a Auto-Deploy ustawiony na
+`On Commit` zamiast `checksPass` — czyli dokładne przeciwieństwo zamierzonego zachowania, bo
+każdy merge na `main` szedłby na produkcję **bez czekania na zielone CI**.
+
+To tłumaczyło też brak migracji: `RUN_RELEASE_ON_START` nie istniało, więc warunek w
+entrypoincie był fałszywy i blok się nie wykonał. Potwierdziło to zapytanie wprost do bazy —
+zero tabel — zamiast wnioskowania z tego, czego w logu nie było.
+
+Lekcja: **infrastruktura jako kod działa tylko wtedy, gdy platforma ją faktycznie czyta.**
+Plik w repozytorium niczego nie gwarantuje; po pierwszej konfiguracji trzeba obejrzeć
+ustawienia usługi i sprawdzić, że mówią to samo, co plik.
+
 ### Pytania na rozmowę — wdrożenie
 
 **Czemu nie generować pary kluczy JWT przy starcie kontenera?**
@@ -1504,6 +1592,19 @@ osłabiało ochronę przed CSRF.
 Bo w MySQL nieczułość na wielkość liter dawała kolacja `_ci` kolumny, a nie zapytanie.
 PostgreSQL porównuje bajty. Poprawne rozwiązanie to wymusić składanie po obu stronach
 (`LOWER(...) LIKE :param`), czyli powiedzieć wprost to, na co wcześniej się liczyło.
+
+**Kontener działa lokalnie i w CI, a na hostingu wychodzi z kodem 126. Od czego zaczynasz?**
+126 to „znalezione, ale nieuruchamialne", więc nie szukam literówki w ścieżce — to byłoby 127.
+Jeśli sam skrypt startowy się wykonał, zostają prawa i uprawnienia tego, co on uruchamia: bit
+wykonywalności, znaki końca linii w shebangu i **file capabilities**. To ostatnie tłumaczy
+różnicę między środowiskami, bo lokalnie i na runnerze kontener dostaje domyślny zbiór
+capabilities, a platforma hostingowa węższy — a binarki z efektywnym uprawnieniem, którego
+jądro nie może przyznać, nie da się w ogóle wykonać.
+
+**Dodajesz parametr do connection stringa i nic się nie zmienia. Dlaczego?**
+Bo DBAL nie przekazuje query stringa sterownikowi — składa DSN z zamkniętej listy kluczy, a
+resztę ignoruje bez ostrzeżenia. Parametry spoza tej listy trzeba podać kanałem, który
+sterownik czyta: zmienną środowiskową libpq albo opcją sterownika, zależnie od parametru.
 
 **Skąd Doctrine wie, jakiej wersji serwera używa, i czemu to ważne?**
 Z `server_version` w konfiguracji albo z `serverVersion` w connection stringu. Potrzebuje tego,

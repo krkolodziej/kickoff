@@ -103,9 +103,16 @@ jobs:
       # An image that will not start is no better than one that will not build. The container
       # is given no database on purpose: this asks only whether it can serve a request at all,
       # which is exactly what Render's health check asks a minute after every deploy.
+      #
+      # --cap-drop=ALL matters as much as the health check does. A runner hands a container the
+      # default capability set and a hosting platform hands it less, so a binary carrying a file
+      # capability the kernel cannot honour will not execve at all — a failure that reaches
+      # production while every local `docker run` stays green. Dropping everything here is
+      # stricter than the platform, so that failure lands in the pull request instead.
       - name: Start it and ask for the health check
         run: |
           docker run -d --name kickoff-ci -p 8080:8080 \
+            --cap-drop=ALL \
             -e PORT=8080 \
             -e APP_SECRET=ci-only \
             -e 'DATABASE_URL=postgresql://ci:ci@127.0.0.1:5432/ci?serverVersion=17&charset=utf8' \

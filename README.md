@@ -379,6 +379,19 @@ image would put a private key in a public repository's build.
 Then delete the two `.b64` files. They are gitignored, but there is no reason to keep a
 private key lying about.
 
+**4. Check the blueprint was actually read.** Render only reads `render.yaml` when the service
+is created as a *Blueprint*; a plain web service built from the same repository ignores it
+entirely and silently. Open the service's settings and confirm three things:
+
+| | |
+| --- | --- |
+| Auto-Deploy | `checksPass`, not `On Commit` |
+| Health Check Path | `/api/v1/health` |
+| Environment | the full list of variables, not an empty page |
+
+If any of them is missing, the service was not created from the blueprint — delete it and
+create it again through *New → Blueprint*.
+
 Afterwards every merge to `main` runs CI and, if it passes, deploys.
 
 ### What to expect on the free plan
