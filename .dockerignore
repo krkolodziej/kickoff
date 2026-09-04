@@ -1,0 +1,18 @@
+# Everything the build makes for itself, and everything it must never see.
+**/node_modules
+**/vendor
+**/var
+**/dist
+**/.git
+**/.github
+**/coverage
+**/.phpunit.cache
+**/.php-cs-fixer.cache
+
+# Local secrets and keys. The image gets its keypair from the environment at start.
+**/.env.local
+**/.env.*.local
+backend/config/jwt/*.pem
+
+docs
+dev.ps1

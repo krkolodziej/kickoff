@@ -30,7 +30,7 @@ class SeasonRepository extends ServiceEntityRepository
             ->setParameter('league', $league);
 
         if (null !== $term = $query->searchTerm()) {
-            $qb->andWhere('s.name LIKE :search')->setParameter('search', '%'.$term.'%');
+            $qb->andWhere('LOWER(s.name) LIKE :search')->setParameter('search', '%'.mb_strtolower($term).'%');
         }
 
         return $qb;

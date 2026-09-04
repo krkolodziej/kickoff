@@ -1,0 +1,75 @@
+# Free-tier deployment.
+#
+# The database lives on Neon rather than on Render, because a free Render Postgres is deleted
+# thirty days after it is created while a free Neon project is permanent. Paste the Neon
+# connection string into DATABASE_URL when the blueprint asks for it.
+#
+# A free instance sleeps after fifteen minutes without traffic and takes about a minute to
+# wake, so the first request after a quiet spell is slow. Nothing is lost by it: the state
+# lives in Neon, and the JWT keys arrive from the environment rather than being generated at
+# start, so a sleep does not sign everybody out.
+
+services:
+  - type: web
+    name: kickoff
+    runtime: docker
+    plan: free
+    region: frankfurt
+    dockerfilePath: ./Dockerfile
+    healthCheckPath: /api/v1/health
+
+    # Deploy only once GitHub's checks are green. The alternative, "commit", ships whatever
+    # lands on main — including a red build, which is how a broken image reaches production.
+    autoDeployTrigger: checksPass
+
+    envVars:
+      - key: APP_ENV
+        value: prod
+      - key: APP_DEBUG
+        value: "0"
+
+      # Rotating this signs nobody out — it is not what tokens are signed with — but it does
+      # invalidate anything else derived from it, so let Render keep it stable.
+      - key: APP_SECRET
+        generateValue: true
+
+      # The Neon pooled connection string, including ?sslmode=require.
+      - key: DATABASE_URL
+        sync: false
+
+      # The RS256 keypair, base64 so it survives a web form. It cannot be generated at start:
+      # a free instance sleeps, and a new keypair on every wake would sign out whoever was
+      # already looking. It cannot be baked into the image either, for the obvious reason.
+      - key: JWT_SECRET_KEY_B64
+        sync: false
+      - key: JWT_PUBLIC_KEY_B64
+        sync: false
+      - key: JWT_PASSPHRASE
+        sync: false
+
+      # Where the entrypoint writes the keys it decodes.
+      - key: JWT_SECRET_KEY
+        value: /app/config/jwt/private.pem
+      - key: JWT_PUBLIC_KEY
+        value: /app/config/jwt/public.pem
+
+      # Access tokens live fifteen minutes; refresh cookies thirty days and rotate on use.
+      # Rotation is safe here in a way it is not in development, where React's double effect
+      # invocation can race two refreshes.
+      - key: JWT_TOKEN_TTL
+        value: "900"
+      - key: JWT_REFRESH_TTL
+        value: "2592000"
+      - key: JWT_REFRESH_SINGLE_USE
+        value: "1"
+      - key: JWT_REFRESH_COOKIE_SECURE
+        value: "1"
+
+      # Same origin, so cross-origin requests are nobody's business but an attacker's.
+      - key: CORS_ALLOW_ORIGIN
+        value: ^$
+
+      # A pre-deploy command is a paid feature, so migrations run from the entrypoint. Safe to
+      # repeat: this fires on every wake from sleep, not only on every deploy.
+      - key: RUN_RELEASE_ON_START
+        value: "true"

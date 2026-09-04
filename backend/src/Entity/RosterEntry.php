@@ -20,6 +20,11 @@ use Doctrine\ORM\Mapping as ORM;
 #[ORM\Table(name: 'roster_entries')]
 #[ORM\UniqueConstraint(name: 'uniq_roster_squad_player', columns: ['season_team_id', 'player_id'])]
 #[ORM\UniqueConstraint(name: 'uniq_roster_squad_shirt', columns: ['season_team_id', 'shirt_number'])]
+// A partial unique index: unique across the squad, but only over the rows where `captain`
+// is true. It is what turns "at most one captain" from a promise the application makes
+// into a fact about the schema — and it is the one concrete thing PostgreSQL buys here
+// that MariaDB could not express at all.
+#[ORM\UniqueConstraint(name: 'uniq_roster_one_captain', columns: ['season_team_id'], options: ['where' => 'captain'])]
 #[ORM\HasLifecycleCallbacks]
 class RosterEntry
 {
@@ -45,9 +50,11 @@ class RosterEntry
     private ?PlayerPosition $position = null;
 
     /**
-     * At most one per squad. MariaDB has no partial unique index, so unlike the shirt number
-     * this one cannot be handed to the schema — see SingleCaptainPerSquad and the note in
-     * docs/NOTES.md about what that does and does not guarantee.
+     * At most one per squad, guaranteed by the partial unique index declared above.
+     *
+     * SquadManager still demotes the previous captain rather than letting a write fail —
+     * refusing would make an operator hunt for whoever currently holds the armband — but the
+     * rule no longer depends on that being remembered.
      */
     #[ORM\Column]
     private bool $captain = false;

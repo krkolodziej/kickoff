@@ -137,6 +137,14 @@ final class SquadManager
 
             if (null !== $current && $current !== $entry) {
                 $current->setCaptain(false);
+
+                // Flushed on its own, before the new captain is promoted. Doctrine orders
+                // every INSERT ahead of every UPDATE within one flush, so leaving both
+                // changes to a single unit of work would insert the new captain while the
+                // old flag was still set — which the partial unique index rejects, correctly.
+                // Both flushes sit inside the caller's transaction, so the handover is still
+                // one atomic act.
+                $this->entityManager->flush();
             }
         }
 

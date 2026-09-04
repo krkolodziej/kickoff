@@ -31,8 +31,8 @@ class PlayerRepository extends ServiceEntityRepository
             // CONCAT so that "Jan Kowalski" finds the person whose first and last name are
             // stored separately. Searching each column alone would not match a full name,
             // which is exactly what somebody types.
-            $qb->andWhere("p.firstName LIKE :search OR p.lastName LIKE :search OR CONCAT(p.firstName, ' ', p.lastName) LIKE :search")
-                ->setParameter('search', '%'.$term.'%');
+            $qb->andWhere("LOWER(p.firstName) LIKE :search OR LOWER(p.lastName) LIKE :search OR LOWER(CONCAT(p.firstName, ' ', p.lastName)) LIKE :search")
+                ->setParameter('search', '%'.mb_strtolower($term).'%');
         }
 
         return $qb;
