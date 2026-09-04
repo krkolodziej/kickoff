@@ -189,4 +189,40 @@ class FixtureRepository extends ServiceEntityRepository
             $rows,
         );
     }
+
+    /**
+     * Matches that kick off inside a window, with everything a reminder needs to be written.
+     *
+     * Only SCHEDULED: a match already being played needs no reminder, and a cancelled or
+     * postponed one keeps its old kick-off time in the column, so filtering by time alone
+     * would remind people about matches that are not going to happen.
+     *
+     * The joins are not decoration — writing one reminder reads both club names, the season
+     * and the league, and a hundred matches in a window would otherwise be five hundred
+     * queries in a background worker nobody is watching.
+     *
+     * @return list<Fixture>
+     */
+    public function findKickingOffBetween(\DateTimeImmutable $from, \DateTimeImmutable $to): array
+    {
+        /** @var list<Fixture> $fixtures */
+        $fixtures = $this->createQueryBuilder('f')
+            ->addSelect('home', 'away', 's', 'l')
+            ->innerJoin('f.homeTeam', 'home')
+            ->innerJoin('f.awayTeam', 'away')
+            ->innerJoin('f.season', 's')
+            ->innerJoin('s.league', 'l')
+            ->where('f.status = :scheduled')
+            ->andWhere('f.kickOffAt >= :from')
+            ->andWhere('f.kickOffAt < :to')
+            ->orderBy('f.kickOffAt', 'ASC')
+            ->addOrderBy('f.id', 'ASC')
+            ->setParameter('scheduled', MatchStatus::Scheduled)
+            ->setParameter('from', $from)
+            ->setParameter('to', $to)
+            ->getQuery()
+            ->getResult();
+
+        return $fixtures;
+    }
 }

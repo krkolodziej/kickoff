@@ -134,8 +134,30 @@ origin keeps it working without CORS credentials negotiation.
 | --- | --- |
 | API | `cd backend && symfony server:start -d` |
 | SPA | `cd frontend && pnpm run dev` |
+| Worker | `cd backend && php bin/console messenger:consume async scheduler_reminders --time-limit=600` |
 
-`./dev.ps1` starts both.
+`./dev.ps1` starts all three.
+
+The worker is the one that is easy to forget, and nothing complains when it is missing:
+results are recorded, the bell simply never fills, and the messages wait in
+`messenger_messages` for somebody to notice. `--time-limit` rather than an endless run because
+`messenger:consume` handles stop signals through `ext-pcntl`, which does not exist on Windows —
+and because a worker holds the container it booted with, so it keeps running code you have
+already changed. `php bin/console messenger:stop-workers` ends it sooner.
+
+### Background work
+
+| | |
+| --- | --- |
+| What is queued | `php bin/console dbal:run-sql "SELECT queue_name, count(*) FROM messenger_messages GROUP BY queue_name"` |
+| What failed | `php bin/console messenger:failed:show` |
+| What is scheduled | `php bin/console debug:scheduler` |
+| Run the reminder scan now | `php bin/console app:matches:remind` |
+
+Finishing a match queues a notification for the organization's owners and administrators, and
+the scan for matches kicking off in about a day runs every fifteen minutes. Both end up in the
+same table as everything else: the transport is Doctrine, so a message sent inside a
+transaction is committed or rolled back with it.
 
 ### Checks
 
@@ -334,7 +356,7 @@ straight back out.
 | 4 | Round-robin fixture generation | ✅ |
 | 5 | Matches, the state machine, goals and cards | ✅ |
 | 6 | Standings, player statistics, demo data | ✅ |
-| 7 | Messenger, notifications, scheduled reminders | |
+| 7 | Messenger, notifications, scheduled reminders | ✅ |
 | 8 | Realtime match updates, hardening | |
 
 Implementation notes, in Polish, with `file:line` references: [`docs/NOTES.md`](docs/NOTES.md).

@@ -3,6 +3,7 @@ import { Link, Outlet } from 'react-router-dom'
 
 import { useCurrentUser, useLogout } from '@/api/auth'
 import { BrandMark } from '@/components/layout/BrandMark'
+import { NotificationBell } from '@/components/layout/NotificationBell'
 import { ThemeToggle } from '@/components/layout/ThemeToggle'
 import { Button } from '@/components/ui/button'
 
@@ -41,6 +42,8 @@ export function AppShell() {
 
             {user ? (
               <>
+                <NotificationBell />
+
                 <span
                   aria-hidden="true"
                   className="grid size-8 place-items-center rounded-full bg-primary-wash text-[11px] font-semibold text-primary"

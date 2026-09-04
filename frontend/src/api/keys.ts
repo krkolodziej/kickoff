@@ -59,4 +59,10 @@ export const qk = {
 
   matchEvents: (organizationId: number, leagueId: number, seasonId: number, fixtureId: number) =>
     [...qk.fixture(organizationId, leagueId, seasonId, fixtureId), 'events'] as const,
+
+  // Outside the organization subtree on purpose: the bell belongs to the person, not to any
+  // one organization, and it must not be swept away when a season's cache is invalidated.
+  notifications: (unreadOnly = false) => ['notifications', { unreadOnly }] as const,
+
+  unreadNotifications: ['notifications', 'unread-count'] as const,
 } as const

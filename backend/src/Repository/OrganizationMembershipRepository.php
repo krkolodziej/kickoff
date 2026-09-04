@@ -6,8 +6,10 @@ namespace App\Repository;
 
 use App\Entity\Organization;
 use App\Entity\OrganizationMembership;
+use App\Entity\OrganizationRole;
 use App\Entity\User;
 use Doctrine\Bundle\DoctrineBundle\Repository\ServiceEntityRepository;
+use Doctrine\ORM\Query\Expr\Join;
 use Doctrine\Persistence\ManagerRegistry;
 
 /**
@@ -87,5 +89,36 @@ class OrganizationMembershipRepository extends ServiceEntityRepository
     public function existsFor(Organization $organization, User $user): bool
     {
         return null !== $this->findOneBy(['organization' => $organization, 'user' => $user]);
+    }
+
+    /**
+     * The people who run an organization: owners and administrators.
+     *
+     * Members are left out on purpose. A notification that goes to everybody is a notification
+     * everybody learns to ignore, and nothing here is addressed to a spectator — the events
+     * that raise one are all things somebody has to act on or account for.
+     *
+     * @return list<User>
+     */
+    public function managersOf(Organization $organization): array
+    {
+        // Built from User rather than from this repository's own root, because DQL cannot
+        // select a joined alias on its own: "SELECT u FROM OrganizationMembership m JOIN
+        // m.user u" is a semantic error, not a shortcut. Starting from the entity actually
+        // wanted also says the intent plainly — these are people, not memberships.
+        /** @var list<User> $users */
+        $users = $this->getEntityManager()->createQueryBuilder()
+            ->select('u')
+            ->from(User::class, 'u')
+            ->innerJoin(OrganizationMembership::class, 'm', Join::WITH, 'm.user = u')
+            ->where('m.organization = :organization')
+            ->andWhere('m.role IN (:roles)')
+            ->orderBy('u.id', 'ASC')
+            ->setParameter('organization', $organization)
+            ->setParameter('roles', [OrganizationRole::Owner, OrganizationRole::Admin])
+            ->getQuery()
+            ->getResult();
+
+        return $users;
     }
 }
