@@ -28,8 +28,8 @@ class TeamRepository extends ServiceEntityRepository
             ->setParameter('organization', $organization);
 
         if (null !== $term = $query->searchTerm()) {
-            $qb->andWhere('t.name LIKE :search OR t.shortName LIKE :search OR t.slug LIKE :search')
-                ->setParameter('search', '%'.$term.'%');
+            $qb->andWhere('LOWER(t.name) LIKE :search OR LOWER(t.shortName) LIKE :search OR LOWER(t.slug) LIKE :search')
+                ->setParameter('search', '%'.mb_strtolower($term).'%');
         }
 
         return $qb;

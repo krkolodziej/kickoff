@@ -68,6 +68,15 @@ dokumentu rośnie z każdym etapem.
   - [5.7 Serwer mówi, co wolno](#57-serwer-mówi-co-wolno)
   - [5.8 Pułapki Stage 5](#58-pułapki-stage-5)
   - [Pytania na rozmowę](#pytania-na-rozmowę--stage-5)
+- [Wdrożenie](#wdrożenie)
+  - [D.1 Dlaczego PostgreSQL](#d1-dlaczego-postgresql)
+  - [D.2 Co znalazła zmiana bazy](#d2-co-znalazła-zmiana-bazy)
+  - [D.3 Jeden obraz, jeden origin](#d3-jeden-obraz-jeden-origin)
+  - [D.4 Klucze JWT nie mogą powstawać przy starcie](#d4-klucze-jwt-nie-mogą-powstawać-przy-starcie)
+  - [D.5 Migracje z entrypointu](#d5-migracje-z-entrypointu)
+  - [D.6 Deploy dopiero po zielonych checkach](#d6-deploy-dopiero-po-zielonych-checkach)
+  - [D.7 Jeden menedżer pakietów](#d7-jeden-menedżer-pakietów)
+  - [Pytania na rozmowę](#pytania-na-rozmowę--wdrożenie)
 - [Django → Symfony](#django--symfony)
 
 ---
@@ -1093,13 +1102,19 @@ warto mieć rozszerzenia PHPStana.
 zero na zegarze 12-godzinnym czyta się jak błąd. `hour: 'numeric'` daje `3:00 PM` albo `15:00`,
 zależnie od czytelnika — format zostaje jego, nie nasz.
 
-**Podmiana `node_modules` pod działającym dev serverem.** W trakcie tego etapu ktoś uruchomił w
-`frontend/` `pnpm install`, co przebudowało `node_modules` na układ pnpm i zostawiło
+**Podmiana `node_modules` pod działającym dev serverem.** W trakcie tego etapu w `frontend/`
+uruchomiło się `pnpm install`, co przebudowało `node_modules` na układ pnpm i zostawiło
 `pnpm-lock.yaml` obok zacommitowanego `package-lock.json`. Objawy były mylące: `tsc` nie mógł
 znaleźć własnego binarium, a po naprawie (`npm ci`) Vite dalej podawał **nieświeże moduły** —
 `does not provide an export named 'SeasonPage'` dla pliku, który ten eksport ma. Lekarstwo:
-restart dev servera i `rm -rf node_modules/.vite`. Morał: dwa lockfile'e w jednym projekcie to
-nie kwestia gustu, a błąd konfiguracji — CI używa `npm ci`, więc projekt jest npm-owy.
+restart dev servera i `rm -rf node_modules/.vite`.
+
+Sedno nie leży w tym, który menedżer jest lepszy, tylko w tym, że **dwa lockfile'e w jednym
+projekcie to błąd konfiguracji**: układ `node_modules` na dysku przestaje odpowiadać
+któremukolwiek z nich, a narzędzia zgłaszają to jako brakujące eksporty i znikające binaria —
+objawy, które nie wskazują na przyczynę. Projekt przeszedł potem na pnpm świadomie i w
+całości: pole `packageManager` przypina wersję, `pnpm-lock.yaml` jest jedynym lockfile'em,
+a CI, Dockerfile i README mówią jednym głosem. Patrz [D.7](#d7-jeden-menedżer-pakietów).
 
 ### Pytania na rozmowę — Stage 4
 
@@ -1300,6 +1315,181 @@ jedną.
 
 ---
 
+## Wdrożenie
+
+### D.1 Dlaczego PostgreSQL
+
+Projekt startował na MariaDB, bo taka jest w XAMPP-ie. Przy wdrożeniu okazało się to ślepą
+uliczką: **darmowy, trwały hosting MySQL praktycznie nie istnieje**, a Render — który buduje
+obrazy Dockera za darmo — oferuje wyłącznie Postgresa, i to takiego, który kasuje się po 30
+dniach. Stąd układ skopiowany z poprzedniej aplikacji: **aplikacja na Renderze, baza na
+Neonie**, gdzie darmowy projekt jest bezterminowy.
+
+Zmiana kosztowała mniej, niż się wydaje, bo Doctrine abstrahuje zapytania. Encje, repozytoria
+i DQL zostały bez zmian; przepisała się **tylko warstwa migracji** — sześć plików MySQL-owych
+zastąpił jeden bazowy dla Postgresa. Zysk przy okazji: MariaDB 10.4 jest po EOL, co README
+musiało uczciwie odnotowywać.
+
+I jeden zysk konkretny, nie kosmetyczny — patrz niżej.
+
+### D.2 Co znalazła zmiana bazy
+
+Dwa testy, zielone od tygodni, popsuły się natychmiast. Oba słusznie.
+
+**1. `LIKE` w PostgreSQL rozróżnia wielkość liter.**
+
+W MySQL kolacja `utf8mb4_unicode_ci` sprawiała, że `LIKE '%nowak%'` trafiało w „Nowak" — za
+darmo i bez niczyjej decyzji. Postgres porównuje bajty, więc wyszukiwarka po prostu przestała
+działać dla innej wielkości liter.
+
+Poprawka to `LOWER(kolumna) LIKE :search` z parametrem też zmniejszonym. Więcej pisania i
+wersja uczciwsza: nieczułość na wielkość liter jest teraz **własnością zapytania**, a nie
+przypadkiem konfiguracji kolumny.
+
+**2. Indeks częściowy wykrył realny błąd kolejności zapisów.**
+
+Na MariaDB regułę „najwyżej jeden kapitan na skład" pilnował wyłącznie kod, bo MariaDB nie ma
+indeksów częściowych. PostgreSQL ma:
+
+```php
+#[ORM\UniqueConstraint(name: 'uniq_roster_one_captain', columns: ['season_team_id'], options: ['where' => 'captain'])]
+```
+
+Po dołożeniu go test przekazania opaski **od razu padł z naruszeniem unikalności**. Powód:
+**Doctrine w jednym `flush()` wykonuje wszystkie INSERT-y przed wszystkimi UPDATE-ami.**
+Wstawienie nowego kapitana i zdjęcie opaski poprzedniemu w tej samej jednostce pracy oznaczało
+więc INSERT z `captain = true`, zanim stara flaga została wyczyszczona — czyli moment z dwoma
+kapitanami.
+
+Na MariaDB nie protestowało nic, bo nie było czym: stan końcowy wychodził poprawny, więc błąd
+był niewidoczny. Poprawka to osobny `flush()` na degradację, przed promocją — obie wewnątrz tej
+samej transakcji, więc przekazanie opaski nadal jest jednym aktem.
+
+Morał wart zapamiętania: **ograniczenie w bazie znajduje błędy, których test nie szukał.**
+
+Detal, który kosztował chwilę: Doctrine porównuje predykat indeksu częściowego **dosłownie**.
+`'where' => '(captain)'` sprawia, że `doctrine:schema:validate` wiecznie widzi różnicę, bo
+Postgres zapisuje go jako `captain`, bez nawiasów. Trzeba wpisać dokładnie to, co baza zwraca.
+
+### D.3 Jeden obraz, jeden origin
+
+`Dockerfile` w korzeniu buduje SPA w jednym etapie (`node:22-alpine`), a w drugim składa API na
+**FrankenPHP** — czyli Caddym z wbudowanym PHP. Zbudowana SPA ląduje w `backend/public/`, więc
+Caddy serwuje hashowane assety prosto z dysku, a czego nie znajdzie, wpada do PHP, gdzie
+`SpaController` oddaje `index.html`.
+
+Jeden origin to nie estetyka. **Refresh token jest ciasteczkiem o ścieżce `/api/v1/token`** — z
+jednego hosta działa bez żadnych negocjacji CORS z poświadczeniami.
+
+`SpaController` ma `priority: -1000` i wymaganie z negatywnym lookahead na `api/`, żeby nieznany
+endpoint dalej odpowiadał **404 w kopercie JSON**, a nie HTML-em klientowi, który czeka na JSON.
+Bez tego trasy SPA (`/dashboard`, wklejony link, F5) dawałyby 404 z serwera, który nigdy o nich
+nie słyszał — aplikacja działałaby do pierwszego odświeżenia strony.
+
+FrankenPHP wybrany także z myślą o Stage 8: ma **wbudowany hub Mercure**, więc realtime nie
+będzie wymagał drugiego kontenera ani osobnego procesu.
+
+### D.4 Klucze JWT nie mogą powstawać przy starcie
+
+Najciekawsza pułapka całego wdrożenia.
+
+Odruch mówi: wygeneruj parę kluczy w entrypoincie. **Nie wolno** — darmowa instancja Rendera
+zasypia po piętnastu minutach ciszy, a każde wybudzenie to nowy kontener. Nowa para kluczy przy
+każdym starcie oznacza, że **każdy odwiedzający wylogowuje poprzedniego**.
+
+Drugi odruch: wypal klucze w obrazie. Też nie — prywatny klucz w buildzie publicznego
+repozytorium to prywatny klucz w publicznym repozytorium. Do tego każdy deploy unieważniałby
+wszystkie sesje.
+
+Więc klucze przychodzą **z konfiguracji**, base64 (żeby przeżyły wklejenie w formularz), a
+entrypoint zapisuje je do plików przed startem serwera. Dev i produkcja mają osobne pary —
+klucz z `.env` nigdy nie jedzie na produkcję.
+
+### D.5 Migracje z entrypointu
+
+Render ma fazę pre-deploy, ale **jest płatna**, więc migracje odpalają się przy starcie, pod
+flagą `RUN_RELEASE_ON_START`. To znaczy, że lecą przy **każdym wybudzeniu ze snu**, nie tylko
+przy deployu — dlatego `migrate` musi być bezpieczne do powtarzania (jest) i dlatego jest
+`--allow-no-migration`, żeby „nie ma nic do zrobienia" nie było traktowane jak błąd.
+
+### D.6 Deploy dopiero po zielonych checkach
+
+```yaml
+autoDeployTrigger: checksPass
+```
+
+Komentarz w konfiguracji poprzedniej aplikacji mówi wprost, po co: przy `commit` deployuje się
+**wszystko, co wpadnie na main**, łącznie z czerwonym buildem — i tak raz popsuty obraz trafił
+na produkcję.
+
+Do tego CI ma job, który **buduje ten sam Dockerfile i uruchamia kontener**: pyta go o
+`/api/v1/health` i sprawdza, czy `/dashboard` zwraca SPA. Dockerfile, który się nie buduje, to
+awaria w miejscu, na które nikt nie patrzy; ten job przenosi ją do pull requesta. A ponieważ
+deploy wymaga zielonych checków, obraz, który nie wstaje, nie ma jak pojechać.
+
+### D.7 Jeden menedżer pakietów
+
+Frontend przeszedł w całości na **pnpm**. Powód jest ten sam, który stoi za `--frozen-lockfile`
+i za przypiętym `serverVersion`: **projekt ma mówić jednym głosem**. Wcześniej repo było npm-owe
+(commitowany `package-lock.json`, `npm ci` w CI), a lokalnie potrafiło się na nim wywołać
+`pnpm install` — i to właśnie kosztowało dwa zepsute `node_modules` w Stage 4.
+
+Trzy miejsca trzymają teraz tę samą wersję:
+
+```json
+"packageManager": "pnpm@10.30.2"
+```
+
+CI nie podaje wersji w ogóle — `pnpm/action-setup` czyta ją z tego pola, więc pin istnieje w
+jednym miejscu. Dockerfile instaluje pnpm jawnie zamiast przez corepack: pobieranie samego
+menedżera pakietów w trakcie builda to jeszcze jedna rzecz, która może paść.
+
+Kolejność kroków w CI jest istotna i łatwo ją pomylić: **`pnpm/action-setup` musi iść przed
+`actions/setup-node`**, bo `cache: pnpm` pyta pnpm, gdzie leży jego store. Odwrotna kolejność
+kończy się błędem, którego treść nie wskazuje na kolejność.
+
+`--frozen-lockfile` to odpowiednik `npm ci`: instalacja **odmawia**, zamiast po cichu
+doinstalować zależność, której lockfile nie opisuje.
+
+Zysk techniczny poza samą spójnością: pnpm nie hoistuje. `node_modules` to dowiązania do
+jednego store'u, więc **pakiet nie widzi zależności, których sam nie zadeklarował**. W układzie
+npm-owym import przechodzi przypadkiem, dopóki cudza tranzytywna zależność nie zmieni wersji —
+i wtedy psuje się bez związku z jakąkolwiek zmianą w kodzie. Warto sprawdzić po migracji, czy
+build i testy nadal przechodzą: jeśli któryś pakiet żył z takiego cichego importu, pnpm to
+ujawni od razu.
+
+### Pytania na rozmowę — wdrożenie
+
+**Czemu nie generować pary kluczy JWT przy starcie kontenera?**
+Bo instancja może się restartować częściej, niż się wydaje — darmowy plan usypia po kwadransie
+ciszy. Nowe klucze przy każdym starcie unieważniają wszystkie wydane tokeny, więc każdy kolejny
+odwiedzający wylogowywałby poprzedniego. Klucze to konfiguracja, nie artefakt buildu.
+
+**Co daje jeden obraz z SPA i API zamiast dwóch usług?**
+Jeden origin. Refresh token jest ciasteczkiem o wąskiej ścieżce — z jednego hosta działa bez
+CORS-a z poświadczeniami, bez preflightów i bez `SameSite=None`, które wymagałoby HTTPS i
+osłabiało ochronę przed CSRF.
+
+**Dlaczego `LIKE` przestał działać po zmianie bazy?**
+Bo w MySQL nieczułość na wielkość liter dawała kolacja `_ci` kolumny, a nie zapytanie.
+PostgreSQL porównuje bajty. Poprawne rozwiązanie to wymusić składanie po obu stronach
+(`LOWER(...) LIKE :param`), czyli powiedzieć wprost to, na co wcześniej się liczyło.
+
+**Co daje pnpm poza szybkością?**
+Brak hoistingu. `node_modules` to dowiązania do jednego store'u, więc pakiet nie widzi
+zależności, których nie zadeklarował — import, który w układzie npm-owym przechodził
+przypadkiem, tutaj nie skompiluje się od razu, zamiast paść przy niepowiązanej zmianie wersji
+u kogoś innego. Drugie tyle daje sama spójność: jeden lockfile, wersja przypięta w
+`packageManager`, ta sama komenda lokalnie, w CI i w obrazie.
+
+**Jak indeks częściowy znalazł błąd, którego testy nie widziały?**
+Doctrine w jednym `flush()` robi INSERT-y przed UPDATE-ami, więc przekazanie opaski kapitana
+przechodziło przez stan z dwoma kapitanami. Bez ograniczenia stan końcowy był poprawny i nic
+nie protestowało; z ograniczeniem baza odrzuciła zapis w locie. Ograniczenia w schemacie łapią
+błędy, których nikt nie szukał.
+
+---
+
 ## Django → Symfony
 
 Tabela rośnie z każdym etapem.
@@ -1334,3 +1524,6 @@ Tabela rośnie z każdym etapem.
 | `transaction.atomic()` wokół zdarzenia i wyniku | `EntityManager::wrapInTransaction()` | `src/Domain/Match/MatchEventRecorder.php` |
 | `django.utils.timezone.now()` | `Psr\Clock\ClockInterface` (podmienialny na `MockClock`) | `src/Domain/Match/MatchLifecycle.php` |
 | `TextChoices` + `ALLOWED_TRANSITIONS` w serwisie | metoda na backed enumie | `src/Entity/MatchStatus.php` |
+| `whitenoise` serwujący SPA | Caddy (FrankenPHP) + `SpaController` jako fallback | `src/Controller/SpaController.php` |
+| `render.yaml` z `autoDeployTrigger: checksPass` | to samo, bez zmian | `render.yaml` |
+| release phase / `preDeployCommand` | `RUN_RELEASE_ON_START` w entrypoincie | `docker-entrypoint.sh` |

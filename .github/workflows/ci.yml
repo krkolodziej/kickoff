@@ -18,23 +18,25 @@ jobs:
     runs-on: ubuntu-latest
 
     services:
-      # Deliberately the same engine and major version as local development. A CI database
-      # that is "close enough" hides exactly the bugs CI is there to catch.
+      # Deliberately the same engine and major version as local development, and as the
+      # managed database in production. A CI database that is "close enough" hides exactly
+      # the bugs CI is there to catch — as the move off MySQL demonstrated: a case-sensitive
+      # LIKE and a partial unique index both broke tests that had been green for weeks.
       database:
-        image: mariadb:10.4
+        image: postgres:17-alpine
         env:
-          MARIADB_ALLOW_EMPTY_ROOT_PASSWORD: 'yes'
-          MARIADB_DATABASE: kickoff
+          POSTGRES_PASSWORD: kickoff
+          POSTGRES_DB: kickoff
         ports:
-          - 3306:3306
+          - 5432:5432
         options: >-
-          --health-cmd="mysqladmin ping --silent"
+          --health-cmd="pg_isready -U postgres"
           --health-interval=5s
           --health-timeout=5s
           --health-retries=20
 
     env:
-      DATABASE_URL: mysql://root:@127.0.0.1:3306/kickoff?serverVersion=10.4.32-MariaDB&charset=utf8mb4
+      DATABASE_URL: postgresql://postgres:kickoff@127.0.0.1:5432/kickoff?serverVersion=17&charset=utf8
 
     defaults:
       run:
@@ -46,7 +48,7 @@ jobs:
       - uses: shivammathur/setup-php@v2
         with:
           php-version: '8.2'
-          extensions: pdo_mysql, intl, openssl, sodium, zip
+          extensions: pdo_pgsql, intl, openssl, sodium, zip
           coverage: none
           tools: composer:v2
 
@@ -75,6 +77,69 @@ jobs:
       - run: composer stan
       - run: composer test
 
+  # Render builds this exact Dockerfile on every deploy, so a Dockerfile that does not build
+  # is a deployment that fails somewhere nobody is watching. Building it here moves that
+  # failure into the pull request — and because the service deploys on `checksPass`, an image
+  # that will not build can never ship.
+  image:
+    name: Production image
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Build the deployable image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: false
+          load: true
+          tags: kickoff:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      # An image that will not start is no better than one that will not build. The container
+      # is given no database on purpose: this asks only whether it can serve a request at all,
+      # which is exactly what Render's health check asks a minute after every deploy.
+      - name: Start it and ask for the health check
+        run: |
+          docker run -d --name kickoff-ci -p 8080:8080 \
+            -e PORT=8080 \
+            -e APP_SECRET=ci-only \
+            -e 'DATABASE_URL=postgresql://ci:ci@127.0.0.1:5432/ci?serverVersion=17&charset=utf8' \
+            -e JWT_PASSPHRASE=ci-only \
+            kickoff:ci
+
+          for attempt in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:8080/api/v1/health; then
+              echo "healthy after ${attempt}s"
+              exit 0
+            fi
+            sleep 1
+          done
+
+          echo "the container never became healthy"
+          docker logs kickoff-ci
+          exit 1
+
+      # The SPA has to be *inside* the image, not merely built beside it, and its own routes
+      # have to reach it rather than 404. Both are easy to break in the Dockerfile and neither
+      # shows up in any other job.
+      - name: Check the SPA ships with it
+        run: |
+          curl -fsS http://127.0.0.1:8080/dashboard | grep -q 'id="root"'
+          echo "the single-page application is served for its own routes"
+
+      - name: Container logs
+        if: failure()
+        run: docker logs kickoff-ci
+
+      - name: Clean up
+        if: always()
+        run: docker rm -f kickoff-ci
+
   frontend:
     name: SPA
     runs-on: ubuntu-latest
@@ -86,16 +151,25 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # Before setup-node, which needs pnpm on PATH to work out where its store lives. With
+      # no version given, the action reads it from the `packageManager` field, so the pin
+      # lives in exactly one place.
+      - uses: pnpm/action-setup@v4
+        with:
+          package_json_file: frontend/package.json
+
       - uses: actions/setup-node@v4
         with:
           # One LTS behind the local runtime on purpose: it catches anything that quietly
           # depends on a very new Node.
           node-version: '22'
-          cache: npm
-          cache-dependency-path: frontend/package-lock.json
+          cache: pnpm
+          cache-dependency-path: frontend/pnpm-lock.yaml
 
-      - run: npm ci
-      - run: npm run lint
-      - run: npx tsc -b
-      - run: npm run test
-      - run: npm run build
+      # --frozen-lockfile is pnpm's `npm ci`: it refuses to run rather than quietly resolving
+      # a dependency the lockfile does not describe.
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm run lint
+      - run: pnpm exec tsc -b
+      - run: pnpm run test
+      - run: pnpm run build

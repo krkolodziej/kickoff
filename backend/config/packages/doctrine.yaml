@@ -8,12 +8,6 @@ doctrine:
 
         profiling_collect_backtrace: '%kernel.debug%'
         use_savepoints: true
-
-        # MariaDB 10.4 still defaults to latin1. Say utf8mb4 once, here, or every
-        # table gets it wrong and no migration will tell you.
-        default_table_options:
-            charset: utf8mb4
-            collation: utf8mb4_unicode_ci
     orm:
         auto_generate_proxy_classes: true
         enable_lazy_ghost_objects: true

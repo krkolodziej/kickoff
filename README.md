@@ -24,7 +24,7 @@ The project is built in stages, each one a pull request. See the
 | Layer | Choice | Why |
 | --- | --- | --- |
 | API | Symfony 7.4 LTS, PHP 8.2 | Hand-written controllers, Serializer and Validator — no API Platform, so the framework's own mechanisms stay visible |
-| Persistence | Doctrine ORM 3, MariaDB 10.4 / MySQL 8 | Migrations are checked in and `doctrine:schema:validate` runs in CI |
+| Persistence | Doctrine ORM 3, PostgreSQL 17 | Migrations are checked in and `doctrine:schema:validate` runs in CI |
 | Authentication | LexikJWTAuthenticationBundle + Gesdinet refresh tokens | Short-lived access token in memory, refresh token in an httpOnly cookie |
 | SPA | React 19, TypeScript, Vite 8 | |
 | Server state | TanStack Query v5 | Hierarchical query keys, so invalidating a season invalidates everything derived from it |
@@ -36,23 +36,30 @@ The project is built in stages, each one a pull request. See the
 
 ## Requirements
 
-- PHP **8.2+** with `pdo_mysql`, `intl`, `openssl`, `sodium`, `zip`
+- PHP **8.2+** with `pdo_pgsql`, `intl`, `openssl`, `sodium`, `zip`
 - Composer 2
-- Node 22+ and npm
-- MariaDB 10.4+ or MySQL 8
+- Node 22+ and [pnpm](https://pnpm.io) 10 (`npm i -g pnpm@10.30.2`)
+- PostgreSQL 14+
 
 ### If you are on XAMPP for Windows
 
-Two extensions ship disabled and both are needed — `sodium` because Lexik's JWT library
-requires it, `zip` because Composer otherwise has to clone every package from source.
-Uncomment them in `C:\xampp\php\php.ini`:
+Three extensions ship disabled and all three are needed — `sodium` because Lexik's JWT
+library requires it, `zip` because Composer otherwise has to clone every package from source,
+and `pdo_pgsql` to reach the database at all. Uncomment them in `C:\xampp\php\php.ini`:
 
 ```ini
+extension=pdo_pgsql
 extension=sodium
 extension=zip
 ```
 
-Confirm with `php -m | findstr /i "sodium zip"`.
+Confirm with `php -m | findstr /i "sodium zip pgsql"`.
+
+XAMPP ships no PostgreSQL server, so install one separately:
+
+```bash
+winget install -e --id PostgreSQL.PostgreSQL.17
+```
 
 ---
 
@@ -71,15 +78,15 @@ composer install
 cp .env .env.local   # then set DATABASE_URL for your machine
 ```
 
-`DATABASE_URL` must name the *exact* server version, and MariaDB must say so:
+`DATABASE_URL` names the server and its major version:
 
 ```dotenv
-DATABASE_URL="mysql://root:@127.0.0.1:3306/kickoff?serverVersion=10.4.32-MariaDB&charset=utf8mb4"
+DATABASE_URL="postgresql://postgres:kickoff@127.0.0.1:5432/kickoff?serverVersion=17&charset=utf8"
 ```
 
-Get it wrong and Doctrine picks the MySQL platform for a MariaDB server, which produces
-migrations the server rejects and a `migrations:diff` that never comes back empty. Check
-with `php bin/console dbal:run-sql "SELECT VERSION()"`.
+`serverVersion` is not decoration: Doctrine picks its platform from it, and a wrong value
+produces migrations the server rejects or a `migrations:diff` that never comes back empty.
+Check what you actually have with `php bin/console dbal:run-sql "SELECT version()"`.
 
 Then create the schema and the signing keys:
 
@@ -106,8 +113,8 @@ symfony server:start -d      # http://127.0.0.1:8000
 
 ```bash
 cd frontend
-npm install
-npm run dev                  # http://localhost:5173
+pnpm install
+pnpm run dev                 # http://localhost:5173
 ```
 
 Vite proxies `/api` to the API, so both halves are served from one origin in development.
@@ -121,7 +128,7 @@ origin keeps it working without CORS credentials negotiation.
 | | |
 | --- | --- |
 | API | `cd backend && symfony server:start -d` |
-| SPA | `cd frontend && npm run dev` |
+| SPA | `cd frontend && pnpm run dev` |
 
 `./dev.ps1` starts both.
 
@@ -136,14 +143,15 @@ composer cs          # php-cs-fixer, check only
 
 ```bash
 cd frontend
-npm run test
-npm run lint
-npx tsc -b
+pnpm run test
+pnpm run lint
+pnpm exec tsc -b
 ```
 
 The test suite uses a separate database (`kickoff_test`, from `dbname_suffix`) and builds it
 by running the real migrations, so a migration that no longer applies fails the suite rather
-than a deployment.
+than a deployment. Create it once with `createdb -U postgres kickoff_test`, or let
+`composer db:setup` do it.
 
 ---
 
@@ -306,6 +314,73 @@ straight back out.
 | 8 | Realtime match updates, hardening | |
 
 Implementation notes, in Polish, with `file:line` references: [`docs/NOTES.md`](docs/NOTES.md).
+
+---
+
+## Deployment
+
+One image holds both halves: the SPA is built in the first stage, and Caddy — with PHP
+embedded, via FrankenPHP — serves its hashed assets straight off disk while everything it
+cannot find falls through to Symfony. That is not tidiness. The refresh token is a cookie
+scoped to `/api/v1/token`, and a single origin means it works with no CORS credentials
+negotiation at all.
+
+| | |
+| --- | --- |
+| Application | Render, Docker, free plan |
+| Database | Neon — a free Render Postgres is deleted after thirty days; a free Neon project is not |
+| Trigger | `autoDeployTrigger: checksPass` — merging to `main` deploys **only once CI is green** |
+| Release | Migrations run from the entrypoint; a pre-deploy hook is a paid feature |
+
+CI builds this same Dockerfile, starts the container and asks it for `/api/v1/health` and for
+`/dashboard`. An image that will not build or will not boot fails in the pull request, and
+since deployment waits for green checks, it can never reach production.
+
+### First-time setup
+
+**1. A database.** Create a free project at [neon.tech](https://neon.tech) and copy the
+*pooled* connection string. Doctrine needs to know the platform, so append the version:
+
+```
+postgresql://USER:PASSWORD@HOST/DB?sslmode=require&serverVersion=17
+```
+
+**2. A signing keypair — a fresh one, not the one in `.env`.**
+
+```bash
+cd backend
+php bin/console lexik:jwt:generate-keypair --overwrite
+base64 -w0 config/jwt/private.pem > ../jwt-private.b64
+base64 -w0 config/jwt/public.pem  > ../jwt-public.b64
+```
+
+> On XAMPP, prefix the first command with `OPENSSL_CONF=C:/xampp/php/extras/ssl/openssl.cnf`.
+
+The keypair is configuration rather than a build artefact, and deliberately so. Generating one
+at start would mint a new pair every time the container wakes — and a free instance sleeps
+after fifteen quiet minutes, so every visitor would sign out the last one. Baking it into the
+image would put a private key in a public repository's build.
+
+**3. The service.** In Render, *New → Blueprint* and point it at this repository;
+`render.yaml` describes everything else. Fill in the four values it asks for:
+
+| Variable | Value |
+| --- | --- |
+| `DATABASE_URL` | the Neon string from step 1 |
+| `JWT_SECRET_KEY_B64` | contents of `jwt-private.b64` |
+| `JWT_PUBLIC_KEY_B64` | contents of `jwt-public.b64` |
+| `JWT_PASSPHRASE` | the passphrase from step 2 |
+
+Then delete the two `.b64` files. They are gitignored, but there is no reason to keep a
+private key lying about.
+
+Afterwards every merge to `main` runs CI and, if it passes, deploys.
+
+### What to expect on the free plan
+
+The instance sleeps after fifteen minutes without traffic and takes about a minute to wake, so
+the first request after a quiet spell is slow. Nothing is lost by it: state lives in Neon, and
+the keys come from the environment, so a sleep does not sign anybody out.
 
 ---
 

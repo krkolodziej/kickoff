@@ -26,3 +26,12 @@ phpstan.neon
 /.php-cs-fixer.php
 /.php-cs-fixer.cache
 ###< friendsofphp/php-cs-fixer ###
+
+###> single-page application ###
+# The built SPA is copied in here by the Docker build. A local `pnpm run build` copied here
+# by hand must never be committed: the image builds it from source every time.
+/public/index.html
+/public/favicon.svg
+/public/icons.svg
+/public/assets/
+###< single-page application ###

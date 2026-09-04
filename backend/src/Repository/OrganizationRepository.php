@@ -41,8 +41,8 @@ class OrganizationRepository extends ServiceEntityRepository
             ->setParameter('user', $user);
 
         if (null !== $search && '' !== trim($search)) {
-            $qb->andWhere('o.name LIKE :search OR o.slug LIKE :search')
-                ->setParameter('search', '%'.trim($search).'%');
+            $qb->andWhere('LOWER(o.name) LIKE :search OR LOWER(o.slug) LIKE :search')
+                ->setParameter('search', '%'.mb_strtolower(trim($search)).'%');
         }
 
         // Doctrine applies the column's enumType even to a scalar select, so `role` arrives

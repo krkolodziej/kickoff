@@ -14,4 +14,4 @@
 - [ ] `composer test` (PHPUnit)
 - [ ] `composer stan` (PHPStan)
 - [ ] `composer cs` (php-cs-fixer)
-- [ ] `npm run test && npm run lint && npx tsc -b` in `frontend/`
+- [ ] `pnpm run test && pnpm run lint && pnpm exec tsc -b` in `frontend/`

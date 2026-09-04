@@ -56,8 +56,8 @@ class OrganizationMembershipRepository extends ServiceEntityRepository
             ->setParameter('organization', $organization);
 
         if (null !== $search && '' !== trim($search)) {
-            $qb->andWhere('u.email LIKE :search OR u.firstName LIKE :search OR u.lastName LIKE :search')
-                ->setParameter('search', '%'.trim($search).'%');
+            $qb->andWhere('LOWER(u.email) LIKE :search OR LOWER(u.firstName) LIKE :search OR LOWER(u.lastName) LIKE :search')
+                ->setParameter('search', '%'.mb_strtolower(trim($search)).'%');
         }
 
         /* @var list<OrganizationMembership> */

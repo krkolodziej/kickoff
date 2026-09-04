@@ -14,7 +14,7 @@ Pop-Location
 
 Write-Host 'Starting the SPA on http://localhost:5173' -ForegroundColor Green
 Push-Location (Join-Path $root 'frontend')
-Start-Process -FilePath 'npm' -ArgumentList 'run', 'dev' -NoNewWindow
+Start-Process -FilePath 'pnpm' -ArgumentList 'run', 'dev' -NoNewWindow
 Pop-Location
 
 Write-Host ''
