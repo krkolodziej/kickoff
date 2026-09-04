@@ -53,6 +53,24 @@ enum MatchStatus: string
     }
 
     /**
+     * Whether what happened in a match in this state counts towards a player's season.
+     *
+     * A goal scored in a match still being played is a goal, so the top-scorer list moves
+     * while you watch it. The league table does not, because points are awarded at full time
+     * and not before. The asymmetry is deliberate and it is the same asymmetry a real
+     * competition has.
+     *
+     * Cancelled and postponed matches are excluded even when events were recorded before the
+     * whistle: those are matches that did not happen.
+     *
+     * @return list<self>
+     */
+    public static function countedInStatistics(): array
+    {
+        return [self::Live, self::Finished];
+    }
+
+    /**
      * @return list<string>
      */
     public function allowedTransitionValues(): array

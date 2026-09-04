@@ -6,11 +6,13 @@ import type {
   Fixture,
   GenerateFixturesPayload,
   League,
+  PlayerStatisticsRow,
   RosterEntry,
   RosterEntryPayload,
   Season,
   SeasonPayload,
   SeasonTeam,
+  StandingRow,
 } from './types'
 
 /** The four ids that address anything inside a season. */
@@ -172,6 +174,24 @@ export function useFixtures(path: SeasonPath) {
   return useQuery({
     queryKey: qk.fixtures(path.organizationId, path.leagueId, path.seasonId),
     queryFn: () => apiFetch<Fixture[]>(`${seasonPath(path)}/fixtures`),
+  })
+}
+
+/**
+ * The league table. Read-only, because there is nothing to write: the server works it out
+ * from finished matches on every request rather than storing a second copy of the results.
+ */
+export function useStandings(path: SeasonPath) {
+  return useQuery({
+    queryKey: qk.standings(path.organizationId, path.leagueId, path.seasonId),
+    queryFn: () => apiFetch<StandingRow[]>(`${seasonPath(path)}/standings`),
+  })
+}
+
+export function usePlayerStatistics(path: SeasonPath) {
+  return useQuery({
+    queryKey: qk.playerStatistics(path.organizationId, path.leagueId, path.seasonId),
+    queryFn: () => apiFetch<PlayerStatisticsRow[]>(`${seasonPath(path)}/statistics`),
   })
 }
 

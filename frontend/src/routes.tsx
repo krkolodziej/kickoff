@@ -9,7 +9,10 @@ import { LeaguePage } from '@/features/competitions/LeaguePage'
 import { MatchPage } from '@/features/competitions/MatchPage'
 import {
   FixturesSection,
+  OverviewSection,
   SquadsSection,
+  StatisticsSection,
+  TableSection,
 } from '@/features/competitions/season-sections'
 import { SeasonPage } from '@/features/competitions/SeasonPage'
 import { DashboardPage } from '@/features/dashboard/DashboardPage'
@@ -48,9 +51,14 @@ export const router = createBrowserRouter([
             path: '/organizations/:organizationId/leagues/:leagueId/seasons/:seasonId',
             element: <SeasonPage />,
             children: [
-              { index: true, element: <Navigate to="squads" replace /> },
+              // The season now has a front page of its own, so landing on it shows where the
+              // season is up to rather than dropping the reader into an administrative screen.
+              { index: true, element: <Navigate to="overview" replace /> },
+              { path: 'overview', element: <OverviewSection /> },
               { path: 'squads', element: <SquadsSection /> },
               { path: 'fixtures', element: <FixturesSection /> },
+              { path: 'table', element: <TableSection /> },
+              { path: 'statistics', element: <StatisticsSection /> },
             ],
           },
           {

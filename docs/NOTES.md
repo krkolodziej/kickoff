@@ -68,6 +68,16 @@ dokumentu rośnie z każdym etapem.
   - [5.7 Serwer mówi, co wolno](#57-serwer-mówi-co-wolno)
   - [5.8 Pułapki Stage 5](#58-pułapki-stage-5)
   - [Pytania na rozmowę](#pytania-na-rozmowę--stage-5)
+- [Stage 6 — tabela, statystyki i dane demonstracyjne](#stage-6--tabela-statystyki-i-dane-demonstracyjne)
+  - [6.1 Tabela nie jest przechowywana](#61-tabela-nie-jest-przechowywana)
+  - [6.2 Dlaczego dwa zapytania, a nie jedno](#62-dlaczego-dwa-zapytania-a-nie-jedno)
+  - [6.3 Remisy trzeba rozstrzygnąć do końca](#63-remisy-trzeba-rozstrzygnąć-do-końca)
+  - [6.4 Tabela czeka na gwizdek, lista strzelców nie](#64-tabela-czeka-na-gwizdek-lista-strzelców-nie)
+  - [6.5 Czego w statystykach nie ma](#65-czego-w-statystykach-nie-ma)
+  - [6.6 Seeder gra przez prawdziwe serwisy](#66-seeder-gra-przez-prawdziwe-serwisy)
+  - [6.7 Determinizm i idempotencja](#67-determinizm-i-idempotencja)
+  - [6.8 Pułapki Stage 6](#68-pułapki-stage-6)
+  - [Pytania na rozmowę](#pytania-na-rozmowę--stage-6)
 - [Wdrożenie](#wdrożenie)
   - [D.1 Dlaczego PostgreSQL](#d1-dlaczego-postgresql)
   - [D.2 Co znalazła zmiana bazy](#d2-co-znalazła-zmiana-bazy)
@@ -1318,6 +1328,170 @@ jedną.
 
 ---
 
+## Stage 6 — tabela, statystyki i dane demonstracyjne
+
+### 6.1 Tabela nie jest przechowywana
+
+Nie ma encji `Standing`, nie ma kolumny `points` na `season_teams` i nie ma nasłuchiwacza,
+który po zakończeniu meczu dopisuje punkty. Tabela powstaje z wyników **przy każdym żądaniu**
+(`src/Domain/Standings/StandingsCalculator.php`).
+
+Uzasadnienie jest jedno i wystarcza: **przechowywana tabela to druga kopia prawdy.** W chwili,
+w której rozjedzie się z meczami, z których powstała, nie ma jak stwierdzić, która z nich
+kłamie. A rozjechać się może na wiele sposobów — poprawka wyniku, mecz cofnięty do LIVE,
+błąd w nasłuchiwaczu, transakcja, która przeszła w połowie.
+
+Kosztem są trzy zapytania na odsłonę. Przy dwunastu klubach i 132 meczach to nic; gdyby kiedyś
+zaczęło boleć, cache'owanie **wyniku** jest odwracalne i nie wymaga zmiany modelu — a
+denormalizacja wymaga.
+
+### 6.2 Dlaczego dwa zapytania, a nie jedno
+
+Mecz trzyma jeden klub w `home_team_id`, a drugi w `away_team_id`. Jedno `GROUP BY` widzi więc
+klub wyłącznie z jednej strony boiska. „Sezon tego klubu" w jednym zgrupowanym zapytaniu
+wymagałby `UNION`, którego DQL nie ma.
+
+Sezon przyjeżdża zatem jako **przebieg po stronie gospodarzy i przebieg po stronie gości**, a
+sumowanie dzieje się w PHP (`FixtureRepository::seasonAggregates()`). Warto o tym wiedzieć,
+zanim się zobaczy dwa podobne zapytania i uzna je za powielenie.
+
+Test na to jest w `StandingsTableTest::testHomeAndAwayAggregatesAreAddedTogether` i jest tam
+nieprzypadkowo: **gdyby połówki się nie sumowały, każdy klub pokazywałby pół sezonu — a tabela
+i tak wyglądałaby całkowicie wiarygodnie.** To jest ta klasa błędu, której się nie zauważa.
+
+Agregaty wracają z PostgreSQL-a jako **tekst**, bo `COUNT` i `SUM` to `bigint`, a sterownik
+nie ma go jak oddać liczbą. Rzutowanie siedzi na granicy repozytorium, żeby wszystko powyżej
+liczyło na intach.
+
+### 6.3 Remisy trzeba rozstrzygnąć do końca
+
+Kolejność to punkty, różnica bramek, bramki zdobyte, **nazwa, id**. Dwa ostatnie kryteria nie
+są regułami, o które ktokolwiek gra — są po to, żeby to samo żądanie dwa razy dało tę samą
+tabelę.
+
+Bez nich baza ma prawo zwrócić którykolwiek z klubów remisujących jako pierwszy, a tabela,
+która przy odświeżeniu zmienia kolejność, **czyta się jak zepsuta, choć każda liczba w niej
+jest poprawna**. To ta sama zasada co whitelistowane sortowanie list w Stage 3a.
+
+### 6.4 Tabela czeka na gwizdek, lista strzelców nie
+
+Do tabeli liczą się wyłącznie mecze `FINISHED`. Do statystyk zawodników — `LIVE` **i**
+`FINISHED` (`MatchStatus::countedInStatistics()`).
+
+To nie jest niekonsekwencja, tylko odwzorowanie prawdziwych rozgrywek: punkty przyznaje się na
+koniec meczu, a gol w 60. minucie jest golem od razu. Lista strzelców rusza się w trakcie
+meczu, tabela nie. Test `testGoalsInAMatchInProgressDoCountTowardsThePlayerStatistics` pilnuje
+obu połówek tej reguły naraz.
+
+Mecze `CANCELLED` i `POSTPONED` nie liczą się nigdzie — nawet jeśli zdążono w nich zapisać
+zdarzenia przed odwołaniem. Mecz, który się nie odbył, nie jest niczyim dorobkiem.
+
+### 6.5 Czego w statystykach nie ma
+
+Nie ma kolumny „występy" i to jest decyzja, nie przeoczenie. Model nie zapisuje, kto wyszedł
+na boisko — zdarzenie powstaje dopiero wtedy, gdy zawodnik **coś zrobił**. Liczenie meczów, w
+których zawodnik ma zdarzenia, pokazałoby obrońcy, który nie strzelił i nie dostał kartki,
+zero występów.
+
+Kolumna, która dla większości składu podaje nieprawdę, jest gorsza niż kolumna, której nie
+ma. Występy poczekają na model wyjściowej jedenastki.
+
+### 6.6 Seeder gra przez prawdziwe serwisy
+
+`app:seed:demo` nie wpisuje wyników do kolumn. Każdy mecz jest **rozpoczynany, jego bramki
+zapisywane pojedynczo, a potem kończony** — przez te same `MatchLifecycle` i
+`MatchEventRecorder`, których używa API.
+
+Dzięki temu seeder jest ćwiczeniem reguł domenowych, a nie obejściem ich. Gol, który przestał
+ruszać wynik, przejście, które przestało być dozwolone, albo walidacja składu, która zaczęła
+odrzucać własnych zawodników — wszystko to **wywala tę komendę**, zanim wywali produkcję.
+
+Skutek uboczny, który się liczy: dane demonstracyjne są z definicji spójne, bo powstały tą
+samą drogą co dane prawdziwe.
+
+### 6.7 Determinizm i idempotencja
+
+Dwie własności ważniejsze od samych danych.
+
+**Determinizm.** Losowość pochodzi z `Randomizer` na zaseedowanym `Mt19937`, więc ta sama
+komenda daje tę samą ligę na każdej maszynie. Demo, którego tabela zmienia się przy każdym
+uruchomieniu, **nie nadaje się do sprawdzania tabeli** — nie ma z czym porównać. Sprawdzone
+wprost: przebudowa z `--flush` dała tabelę identyczną co do punktu.
+
+**Idempotencja.** Drugie uruchomienie bez `--flush` jest no-opem, a nie drugą ligą obok
+pierwszej. Seeder, który powiela własny wynik, nie może trafić do skryptu startowego.
+
+Jedna rzecz celowo **nie** jest deterministyczna: hasło konta właściciela. Stałe hasło w
+publicznym repozytorium jest stałym hasłem na każdym wdrożeniu, które kiedykolwiek tę komendę
+uruchomi. Dane są powtarzalne, poświadczenie nie.
+
+Uwaga o `EntityManager::clear()`: flushowanie partiami jest, `clear()` świadomie nie ma.
+Odłączenie encji zwolniłoby pamięć, której ta komenda nie potrzebuje, a składy zebrane wyżej
+muszą pozostać zarządzane dla meczów rozgrywanych niżej. Nawyk wart znania, nie wart
+kopiowania tam, gdzie kupuje realny błąd za wyobrażoną oszczędność.
+
+### 6.8 Pułapki Stage 6
+
+**`public const int` to PHP 8.3.** Drugi raz w tym projekcie — typowane stałe klasowe nie
+istnieją w 8.2 i kończą się błędem parsowania.
+
+**`Randomizer::getFloat()` też jest z 8.3.** Ta pułapka jest gorsza, bo `php -l` jej nie
+widzi: kod się parsuje i wywala dopiero przy wywołaniu. Ułamek powstaje więc z losowania
+liczby całkowitej.
+
+**Każde żądanie w teście funkcjonalnym restartuje kernel.** Encje utworzone w `setUp` należą
+do `EntityManager`-a, który wtedy istniał; podane późniejszemu menedżerowi wyglądają jak nowe
+wiersze i `flush()` odmawia. `MatchApiTest` tego nie widział, bo tworzy mecz raz, przed
+pierwszym żądaniem. Rozwiązanie: **id przeżywa restart**, więc encje trzeba odszukać na nowo.
+
+**`array_values()` na liście.** Trzeci raz. PHPStan łapie to za każdym razem.
+
+**Test, który nie może paść.** `assertSame(3, StandingsTable::POINTS_FOR_A_WIN)` porównuje
+literał ze stałą o tej samej wartości — PHPStan zgłasza to jako zawsze prawdziwe i ma rację.
+Taki test nie chroni przed niczym; usunięty.
+
+**PHPStan potrzebuje ciepłego kontenera.** `config/reference.php` odwołuje się do klas
+`Symfony\Config\*`, które powstają w `var/cache`. Po eksperymentach z `APP_ENV=prod` cache
+był niepełny i analiza sypnęła błędami w pliku, którego nie tknąłem. `cache:warmup` naprawia;
+CI tego nie widzi, bo zawsze startuje na zimno i sam rozgrzewa cache.
+
+### Pytania na rozmowę — Stage 6
+
+**Dlaczego tabela nie jest zapisana w bazie?**
+Bo byłaby drugą kopią prawdy. Kiedy rozjedzie się z meczami, z których powstała, nie ma jak
+ustalić, która wersja jest poprawna. Wyliczanie kosztuje trzy zapytania na odsłonę, a jeśli
+kiedyś zaboli, cache'owanie wyniku jest odwracalne — denormalizacja nie.
+
+**Czemu sezon liczy się dwoma zapytaniami?**
+Bo mecz trzyma dwa kluby w dwóch kolumnach, więc jedno `GROUP BY` widzi klub tylko z jednej
+strony. Bez `UNION`, którego DQL nie ma, sezon przyjeżdża w dwóch kawałkach i sumuje się w
+PHP. Gdyby ktoś zapomniał je zsumować, każdy klub pokazywałby pół sezonu — i nikt by tego nie
+zauważył, bo tabela dalej wyglądałaby sensownie.
+
+**Po co rozstrzygać remis po nazwie i id, skoro nikt tak nie gra?**
+Żeby to samo żądanie dwa razy dało tę samą kolejność. Bez tego baza może zwrócić remisujące
+kluby w dowolnej kolejności, a tabela zmieniająca układ przy odświeżeniu wygląda na zepsutą,
+choć każda liczba w niej jest poprawna.
+
+**Dlaczego gol w trwającym meczu liczy się do listy strzelców, a nie do tabeli?**
+Bo punkty przyznaje się na koniec meczu, a gol jest golem od razu. Tak działają prawdziwe
+rozgrywki i tak samo zachowuje się aplikacja. To nie niekonsekwencja, tylko dwie różne reguły
+opisujące dwie różne rzeczy.
+
+**Co daje to, że seeder gra przez serwisy domenowe zamiast wpisywać wyniki?**
+Zamienia go w test. Gol, który przestał ruszać wynik, przejście, które przestało być
+dozwolone, walidacja składu, która zaczęła odrzucać własnych zawodników — każda z tych regresji
+wywala komendę. Przy okazji dane demonstracyjne są spójne z definicji, bo powstały tą samą
+drogą co prawdziwe.
+
+**Po co seedowi determinizm?**
+Żeby dało się go użyć do sprawdzenia czegokolwiek. Demo, którego tabela zmienia się przy
+każdym uruchomieniu, nie ma punktu odniesienia — nie da się powiedzieć „tu powinno być 25
+punktów". Hasło właściciela jest wyjątkiem i celowo losowe: stałe hasło w publicznym
+repozytorium to stałe hasło wszędzie, gdzie tę komendę odpalono.
+
+---
+
 ## Wdrożenie
 
 ### D.1 Dlaczego PostgreSQL
@@ -1658,6 +1832,11 @@ Tabela rośnie z każdym etapem.
 | `select_for_update()` | `EntityManager::find(..., LockMode::PESSIMISTIC_WRITE)` | `src/Domain/Fixture/FixtureGenerator.php` |
 | serwis w `services.py` bez importu modeli | klasa w `src/Domain/**` bez Doctrine | `src/Domain/Fixture/RoundRobinScheduler.php` |
 | `SimpleTestCase` (bez bazy) | `PHPUnit\Framework\TestCase` (bez kernela) | `tests/Domain/RoundRobinSchedulerTest.php` |
+| `Count('id', filter=Q(...))` | `SUM(CASE WHEN ... THEN 1 ELSE 0 END)` w DQL | `src/Repository/FixtureRepository.php` |
+| `.values(...).annotate(...)` | `select()` + `groupBy()` + `getArrayResult()` | `src/Repository/MatchEventRepository.php` |
+| tabela wyliczana w `services/standings.py` | serwis kompozycyjny + czysta klasa reguł | `src/Domain/Standings/StandingsCalculator.php` |
+| `BaseCommand` w `management/commands/` | `#[AsCommand]` + `SymfonyStyle` | `src/Command/SeedDemoCommand.php` |
+| `random.seed(...)` w seedzie | `Randomizer` na `Mt19937` z ustalonym ziarnem | `src/Command/SeedDemoCommand.php` |
 | `transaction.atomic()` wokół zdarzenia i wyniku | `EntityManager::wrapInTransaction()` | `src/Domain/Match/MatchEventRecorder.php` |
 | `django.utils.timezone.now()` | `Psr\Clock\ClockInterface` (podmienialny na `MockClock`) | `src/Domain/Match/MatchLifecycle.php` |
 | `TextChoices` + `ALLOWED_TRANSITIONS` w serwisie | metoda na backed enumie | `src/Entity/MatchStatus.php` |
