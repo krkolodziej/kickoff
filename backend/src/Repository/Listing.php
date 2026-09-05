@@ -46,20 +46,32 @@ final class Listing
     }
 
     /**
+     * Fetches the page and hands it to the mapper — all of it, not one row at a time.
+     *
+     * A page-level mapper rather than a per-row one, because that is the difference between a
+     * list that costs one query and a list that costs one query per row. Most resources carry
+     * something the entity cannot answer for on its own — a player's current club, a club's
+     * squad size, a league's latest season — and fetching that inside a per-row mapper is the
+     * textbook N+1 wearing a closure. Given the whole page, a mapper asks for every row's
+     * aggregate at once and then hands each row its own.
+     *
+     * A list with nothing to annotate pays for this in one `array_map` at the call site, which
+     * is a fair price for making the expensive shape the obvious one.
+     *
      * @template TEntity of object
      * @template TResource
      *
-     * @param callable(TEntity): TResource $map
+     * @param callable(list<TEntity>): list<TResource> $mapPage
      *
      * @return list<TResource>|ResultPage<TResource>
      */
-    public function respond(QueryBuilder $qb, ListQuery $query, callable $map): array|ResultPage
+    public function respond(QueryBuilder $qb, ListQuery $query, callable $mapPage): array|ResultPage
     {
         if (!$query->isPaginated()) {
             /** @var list<TEntity> $rows */
             $rows = $qb->getQuery()->getResult();
 
-            return array_map($map, $rows);
+            return $mapPage($rows);
         }
 
         $qb->setFirstResult($query->offset())->setMaxResults($query->size());
@@ -82,7 +94,7 @@ final class Listing
             pageSize: $query->size(),
             next: $page < $lastPage ? $page + 1 : null,
             previous: $page > 1 ? $page - 1 : null,
-            results: array_map($map, $rows),
+            results: $mapPage($rows),
         );
     }
 }

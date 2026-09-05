@@ -1,4 +1,3 @@
-import type { ReactNode } from 'react'
 import { Link } from 'react-router-dom'
 
 import {
@@ -8,6 +7,7 @@ import {
   type SeasonPath,
 } from '@/api/seasons'
 import type { Fixture, PlayerStatisticsRow, StandingRow } from '@/api/types'
+import { Nothing, SectionCard, Statistic } from '@/components/data/SectionCard'
 import { ErrorState, LoadingState } from '@/components/data/States'
 import { MatchStatusBadge } from '@/components/domain/MatchStatusBadge'
 import { formatKickOffDay } from '@/lib/datetime'
@@ -62,7 +62,7 @@ export function OverviewPanel({ path }: { path: SeasonPath }) {
       </div>
 
       {live.length > 0 ? (
-        <Card title="Being played now" href={`${base}/fixtures`} linkLabel="Calendar">
+        <SectionCard title="Being played now" href={`${base}/fixtures`} linkLabel="Calendar">
           <ul className="divide-y divide-border">
             {live.map((fixture) => (
               <li key={fixture.id}>
@@ -83,11 +83,11 @@ export function OverviewPanel({ path }: { path: SeasonPath }) {
               </li>
             ))}
           </ul>
-        </Card>
+        </SectionCard>
       ) : null}
 
       <div className="grid gap-4 lg:grid-cols-2">
-        <Card title="Top of the table" href={`${base}/table`} linkLabel="Full table">
+        <SectionCard title="Top of the table" href={`${base}/table`} linkLabel="Full table">
           {table.length === 0 ? (
             <Nothing>No clubs are registered yet.</Nothing>
           ) : (
@@ -97,9 +97,9 @@ export function OverviewPanel({ path }: { path: SeasonPath }) {
               ))}
             </ol>
           )}
-        </Card>
+        </SectionCard>
 
-        <Card title="Leading scorers" href={`${base}/statistics`} linkLabel="All statistics">
+        <SectionCard title="Leading scorers" href={`${base}/statistics`} linkLabel="All statistics">
           {scorers.length === 0 ? (
             <Nothing>Nobody has scored yet.</Nothing>
           ) : (
@@ -109,10 +109,10 @@ export function OverviewPanel({ path }: { path: SeasonPath }) {
               ))}
             </ol>
           )}
-        </Card>
+        </SectionCard>
       </div>
 
-      <Card title="Coming up" href={`${base}/fixtures`} linkLabel="Calendar">
+      <SectionCard title="Coming up" href={`${base}/fixtures`} linkLabel="Calendar">
         {next.length === 0 ? (
           <Nothing>Nothing is scheduled. Generate the calendar to fill the season.</Nothing>
         ) : (
@@ -122,44 +122,8 @@ export function OverviewPanel({ path }: { path: SeasonPath }) {
             ))}
           </ul>
         )}
-      </Card>
+      </SectionCard>
     </div>
-  )
-}
-
-function Statistic({ label, value }: { label: string; value: string | number }) {
-  return (
-    <div className="surface-panel px-4 py-3">
-      <p className="text-[12px] font-semibold uppercase tracking-wide text-foreground-subtle">
-        {label}
-      </p>
-      <p className="mt-1 text-2xl font-semibold tabular-nums">{value}</p>
-    </div>
-  )
-}
-
-function Card({
-  title,
-  href,
-  linkLabel,
-  children,
-}: {
-  title: string
-  href: string
-  linkLabel: string
-  children: ReactNode
-}) {
-  return (
-    <section className="surface-panel flex flex-col px-4 py-3">
-      <header className="mb-1 flex items-baseline justify-between gap-3">
-        <h2 className="text-[15px] font-semibold">{title}</h2>
-        <Link to={href} className="text-[13px] text-primary hover:underline">
-          {linkLabel}
-        </Link>
-      </header>
-
-      {children}
-    </section>
   )
 }
 
@@ -206,6 +170,3 @@ function UpcomingLine({ fixture, base }: { fixture: Fixture; base: string }) {
   )
 }
 
-function Nothing({ children }: { children: ReactNode }) {
-  return <p className="py-2 text-sm text-foreground-muted">{children}</p>
-}

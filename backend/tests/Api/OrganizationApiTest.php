@@ -214,4 +214,45 @@ final class OrganizationApiTest extends ApiTestCase
         self::assertResponseStatusCodeSame(Response::HTTP_UNPROCESSABLE_ENTITY);
         self::assertArrayHasKey('slug', $this->json()['fields']);
     }
+
+    /**
+     * An organization card that says only how many people are in it tells a reader nothing
+     * about what is inside. The counts are batched rather than joined onto the membership
+     * query, which would multiply them against each other.
+     */
+    public function testAnOrganizationCarriesWhatIsInsideIt(): void
+    {
+        $owner = UserFactory::createOne();
+        $organization = OrganizationFactory::createOne(['createdBy' => $owner]);
+
+        LeagueFactory::createMany(2, ['organization' => $organization]);
+        TeamFactory::createMany(3, ['organization' => $organization]);
+        PlayerFactory::createMany(4, ['organization' => $organization]);
+
+        // Somebody else's, to prove the counts are scoped rather than global.
+        LeagueFactory::createMany(5, ['organization' => OrganizationFactory::createOne()]);
+
+        $this->request('GET', '/api/v1/organizations', null, $this->signIn($owner));
+
+        self::assertResponseIsSuccessful();
+
+        $row = $this->jsonList()[0];
+        self::assertSame(2, $row['league_count']);
+        self::assertSame(3, $row['team_count']);
+        self::assertSame(4, $row['player_count']);
+        self::assertSame(1, $row['member_count']);
+
+        // And one organization answers the same thing as its row in the list.
+        $this->request('GET', '/api/v1/organizations/'.$organization->getId(), null, $this->signIn($owner));
+
+        self::assertSame(
+            [$row['league_count'], $row['team_count'], $row['player_count'], $row['member_count']],
+            [
+                $this->json()['league_count'],
+                $this->json()['team_count'],
+                $this->json()['player_count'],
+                $this->json()['member_count'],
+            ],
+        );
+    }
 }

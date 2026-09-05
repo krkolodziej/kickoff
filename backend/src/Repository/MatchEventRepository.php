@@ -5,10 +5,12 @@ declare(strict_types=1);
 namespace App\Repository;
 
 use App\Dto\Output\PlayerStatisticsRow;
+use App\Dto\Output\PlayerTotals;
 use App\Entity\Fixture;
 use App\Entity\MatchEvent;
 use App\Entity\MatchEventType;
 use App\Entity\MatchStatus;
+use App\Entity\Player;
 use App\Entity\Season;
 use Doctrine\Bundle\DoctrineBundle\Repository\ServiceEntityRepository;
 use Doctrine\Persistence\ManagerRegistry;
@@ -69,19 +71,13 @@ class MatchEventRepository extends ServiceEntityRepository
      */
     public function seasonPlayerTotals(Season $season): array
     {
-        $count = static fn (string $alias, string $type): string => \sprintf(
-            "SUM(CASE WHEN e.type = '%s' THEN 1 ELSE 0 END) AS %s",
-            $type,
-            $alias,
-        );
-
         /** @var list<array{playerId: int|string, firstName: string, lastName: string, teamId: int|string, teamName: string, goals: int|string, yellowCards: int|string, redCards: int|string}> $rows */
         $rows = $this->createQueryBuilder('e')
             ->select('p.id AS playerId', 'p.firstName AS firstName', 'p.lastName AS lastName')
             ->addSelect('t.id AS teamId', 't.name AS teamName')
-            ->addSelect($count('goals', MatchEventType::Goal->value))
-            ->addSelect($count('yellowCards', MatchEventType::YellowCard->value))
-            ->addSelect($count('redCards', MatchEventType::RedCard->value))
+            ->addSelect(self::countOf('goals', MatchEventType::Goal))
+            ->addSelect(self::countOf('yellowCards', MatchEventType::YellowCard))
+            ->addSelect(self::countOf('redCards', MatchEventType::RedCard))
             ->innerJoin('e.fixture', 'f')
             ->innerJoin('e.player', 'p')
             ->innerJoin('e.team', 't')
@@ -116,5 +112,118 @@ class MatchEventRepository extends ServiceEntityRepository
             ),
             $rows,
         );
+    }
+
+    /**
+     * Career goals and cards for a page of players, in one query.
+     *
+     * A sibling of {@see seasonPlayerTotals()} — same conditional aggregation, same
+     * definition of which matches count — but grouped by player alone and asked for a set of
+     * players rather than for a season. A list of players that fetched this per row would be
+     * a query per row; a query-count test asserts that it is not.
+     *
+     * @param list<int> $playerIds
+     *
+     * @return array<int, PlayerTotals> player id => their totals
+     */
+    public function careerTotalsForPlayers(array $playerIds): array
+    {
+        if ([] === $playerIds) {
+            return [];
+        }
+
+        /** @var list<array{playerId: int|string, goals: int|string, yellowCards: int|string, redCards: int|string}> $rows */
+        $rows = $this->createQueryBuilder('e')
+            ->select('IDENTITY(e.player) AS playerId')
+            ->addSelect(self::countOf('goals', MatchEventType::Goal))
+            ->addSelect(self::countOf('yellowCards', MatchEventType::YellowCard))
+            ->addSelect(self::countOf('redCards', MatchEventType::RedCard))
+            ->innerJoin('e.fixture', 'f')
+            ->where('IDENTITY(e.player) IN (:players)')
+            ->andWhere('f.status IN (:played)')
+            ->groupBy('e.player')
+            ->setParameter('players', $playerIds)
+            ->setParameter('played', MatchStatus::countedInStatistics())
+            ->getQuery()
+            ->getArrayResult();
+
+        $totals = [];
+
+        foreach ($rows as $row) {
+            // Cast at the boundary: SUM comes back from PostgreSQL as bigint, i.e. as text.
+            $playerId = (int) $row['playerId'];
+            $totals[$playerId] = new PlayerTotals(
+                playerId: $playerId,
+                goals: (int) $row['goals'],
+                yellowCards: (int) $row['yellowCards'],
+                redCards: (int) $row['redCards'],
+            );
+        }
+
+        return $totals;
+    }
+
+    /**
+     * One player's goals and cards, broken down by season and club.
+     *
+     * {@see seasonPlayerTotals()} is the wrong shape for this: it is season-wide and returns
+     * every player, so a career of five seasons would be five queries fetching a whole league
+     * each time.
+     *
+     * Keyed by season *and* club rather than by season alone. Events carry a club and roster
+     * rows carry a season-team, so the pair is exact unconditionally; season alone happens to
+     * be exact today and would stop being so the moment somebody transfers mid-season.
+     *
+     * @return array<string, PlayerTotals> "seasonId:teamId" => totals
+     */
+    public function totalsForPlayerBySeason(Player $player): array
+    {
+        /** @var list<array{seasonId: int|string, teamId: int|string, goals: int|string, yellowCards: int|string, redCards: int|string}> $rows */
+        $rows = $this->createQueryBuilder('e')
+            ->select('IDENTITY(f.season) AS seasonId', 'IDENTITY(e.team) AS teamId')
+            ->addSelect(self::countOf('goals', MatchEventType::Goal))
+            ->addSelect(self::countOf('yellowCards', MatchEventType::YellowCard))
+            ->addSelect(self::countOf('redCards', MatchEventType::RedCard))
+            ->innerJoin('e.fixture', 'f')
+            ->where('e.player = :player')
+            ->andWhere('f.status IN (:played)')
+            ->groupBy('f.season')
+            ->addGroupBy('e.team')
+            ->setParameter('player', $player)
+            ->setParameter('played', MatchStatus::countedInStatistics())
+            ->getQuery()
+            ->getArrayResult();
+
+        $totals = [];
+
+        foreach ($rows as $row) {
+            $key = self::seasonTeamKey((int) $row['seasonId'], (int) $row['teamId']);
+            $totals[$key] = new PlayerTotals(
+                playerId: (int) $player->getId(),
+                goals: (int) $row['goals'],
+                yellowCards: (int) $row['yellowCards'],
+                redCards: (int) $row['redCards'],
+            );
+        }
+
+        return $totals;
+    }
+
+    /**
+     * The key {@see totalsForPlayerBySeason()} returns, so that callers do not have to build
+     * the same string from memory and get the separator wrong.
+     */
+    public static function seasonTeamKey(int $seasonId, int $teamId): string
+    {
+        return $seasonId.':'.$teamId;
+    }
+
+    /**
+     * Conditional aggregation: counting goals, yellows and reds in one pass over the rows
+     * rather than in three round trips that would then have to be merged.
+     */
+    private static function countOf(string $alias, MatchEventType $type): string
+    {
+        return \sprintf("SUM(CASE WHEN e.type = '%s' THEN 1 ELSE 0 END) AS %s", $type->value, $alias);
     }
 }

@@ -56,24 +56,10 @@ class SeasonTeamRepository extends ServiceEntityRepository
             return [];
         }
 
-        // Grouped separately rather than as an aggregate beside the entity select: mixing
-        // COUNT() with hydrated entities needs a GROUP BY over every selected column, which
-        // is where ONLY_FULL_GROUP_BY differences between MySQL and MariaDB start to bite.
-        /** @var list<array{seasonTeamId: int, squadSize: int|string}> $counts */
-        $counts = $this->getEntityManager()->createQueryBuilder()
-            ->select('IDENTITY(r.seasonTeam) AS seasonTeamId', 'COUNT(r.id) AS squadSize')
-            ->from(RosterEntry::class, 'r')
-            ->where('r.seasonTeam IN (:seasonTeams)')
-            ->groupBy('r.seasonTeam')
-            ->setParameter('seasonTeams', $seasonTeams)
-            ->getQuery()
-            ->getResult();
-
-        $sizes = [];
-
-        foreach ($counts as $row) {
-            $sizes[(int) $row['seasonTeamId']] = (int) $row['squadSize'];
-        }
+        $sizes = $this->squadSizesFor(array_map(
+            static fn (SeasonTeam $seasonTeam): int => (int) $seasonTeam->getId(),
+            $seasonTeams,
+        ));
 
         return array_map(
             static fn (SeasonTeam $seasonTeam): array => [
@@ -142,5 +128,89 @@ class SeasonTeamRepository extends ServiceEntityRepository
         }
 
         return $names;
+    }
+
+    /**
+     * How many players are registered for each of these squads.
+     *
+     * Deliberately not `$seasonTeam->getRosterEntries()->count()`: on an uninitialised
+     * collection that loads the whole collection, so counting a page of clubs that way is a
+     * query per club which fetches rows nobody wanted only to throw them away.
+     *
+     * Grouped separately rather than as an aggregate beside an entity select: mixing COUNT()
+     * with hydrated entities needs a GROUP BY over every selected column, which is where
+     * ONLY_FULL_GROUP_BY differences between databases start to bite.
+     *
+     * @param list<int> $seasonTeamIds
+     *
+     * @return array<int, int> season team id => squad size
+     */
+    public function squadSizesFor(array $seasonTeamIds): array
+    {
+        if ([] === $seasonTeamIds) {
+            return [];
+        }
+
+        /** @var list<array{seasonTeamId: int|string, squadSize: int|string}> $counts */
+        $counts = $this->getEntityManager()->createQueryBuilder()
+            ->select('IDENTITY(r.seasonTeam) AS seasonTeamId', 'COUNT(r.id) AS squadSize')
+            ->from(RosterEntry::class, 'r')
+            ->where('IDENTITY(r.seasonTeam) IN (:seasonTeams)')
+            ->groupBy('r.seasonTeam')
+            ->setParameter('seasonTeams', $seasonTeamIds)
+            ->getQuery()
+            ->getResult();
+
+        $sizes = [];
+
+        foreach ($counts as $row) {
+            // COUNT comes back from PostgreSQL as bigint, which the driver hands over as text.
+            $sizes[(int) $row['seasonTeamId']] = (int) $row['squadSize'];
+        }
+
+        return $sizes;
+    }
+
+    /**
+     * Every season a page of clubs has been registered for, newest first.
+     *
+     * One query answers both of the questions a club row asks — how many seasons it has
+     * played (the row count) and which one is current (the first row) — because the rows
+     * arrive together anyway.
+     *
+     * The season and its league are fetch-joined: the caller turns them into a link, and a
+     * lazy proxy there would be two queries per club.
+     *
+     * @param list<int> $teamIds
+     *
+     * @return array<int, list<SeasonTeam>> team id => registrations, newest season first
+     */
+    public function registrationsForTeams(array $teamIds): array
+    {
+        if ([] === $teamIds) {
+            return [];
+        }
+
+        /** @var list<SeasonTeam> $rows */
+        $rows = $this->createQueryBuilder('st')
+            ->addSelect('s', 'l')
+            ->innerJoin('st.season', 's')
+            ->innerJoin('s.league', 'l')
+            ->where('IDENTITY(st.team) IN (:teams)')
+            ->orderBy('s.startDate', 'DESC')
+            ->addOrderBy('s.id', 'DESC')
+            ->addOrderBy('st.id', 'DESC')
+            ->setParameter('teams', $teamIds)
+            ->getQuery()
+            ->getResult();
+
+        $grouped = [];
+
+        foreach ($rows as $registration) {
+            // Free on an unloaded proxy — Doctrine keeps the identifier without a round trip.
+            $grouped[(int) $registration->getTeam()->getId()][] = $registration;
+        }
+
+        return $grouped;
     }
 }

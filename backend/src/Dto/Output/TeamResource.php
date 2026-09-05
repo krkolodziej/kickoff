@@ -15,11 +15,26 @@ final readonly class TeamResource
         public string $shortName,
         public string $slug,
         public \DateTimeImmutable $createdAt,
+        /**
+         * Registration facts, annotated on. A club is registered season by season, so "how
+         * big is the squad" is really "how big is the squad *now*" — the count from the most
+         * recent season this club appears in, and zero for a club nobody has entered yet.
+         *
+         * Defaulted for the same reason as on {@see PlayerResource}: a club created a second
+         * ago has no seasons, and that is an answer rather than a gap.
+         */
+        public int $squadSize = 0,
+        public int $seasonsPlayed = 0,
+        public ?SeasonRefResource $latestSeason = null,
     ) {
     }
 
-    public static function fromEntity(Team $team): self
-    {
+    public static function fromEntity(
+        Team $team,
+        int $squadSize = 0,
+        int $seasonsPlayed = 0,
+        ?SeasonRefResource $latestSeason = null,
+    ): self {
         return new self(
             id: (int) $team->getId(),
             organizationId: (int) $team->getOrganization()->getId(),
@@ -29,6 +44,9 @@ final readonly class TeamResource
             shortName: $team->getShortName(),
             slug: $team->getSlug(),
             createdAt: $team->getCreatedAt(),
+            squadSize: $squadSize,
+            seasonsPlayed: $seasonsPlayed,
+            latestSeason: $latestSeason,
         );
     }
 }

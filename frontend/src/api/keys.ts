@@ -10,6 +10,12 @@ import type { ListParams } from './types'
 export const qk = {
   currentUser: ['auth', 'current-user'] as const,
 
+  // Where the demonstration sign-in wants the visitor to land, written by the mutation that
+  // created the session and read by the guard that acts on it. In the cache rather than in
+  // component state because those two are not in the same tree, and it is cleared with
+  // everything else on sign-out.
+  demoEntry: ['auth', 'demo-entry'] as const,
+
   organizations: (search?: string) =>
     search ? (['organizations', { search }] as const) : (['organizations'] as const),
 
@@ -28,6 +34,20 @@ export const qk = {
 
   league: (organizationId: number, leagueId: number) =>
     ['organizations', organizationId, 'leagues', leagueId] as const,
+
+  // Nested under the organization like everything else, so a club renamed or a player added
+  // sweeps these two along with the lists they came from.
+  team: (organizationId: number, teamId: number) =>
+    ['organizations', organizationId, 'teams', teamId] as const,
+
+  teamProfile: (organizationId: number, teamId: number) =>
+    [...qk.team(organizationId, teamId), 'profile'] as const,
+
+  player: (organizationId: number, playerId: number) =>
+    ['organizations', organizationId, 'players', playerId] as const,
+
+  playerProfile: (organizationId: number, playerId: number) =>
+    [...qk.player(organizationId, playerId), 'profile'] as const,
 
   seasons: (organizationId: number, leagueId: number) =>
     [...qk.league(organizationId, leagueId), 'seasons'] as const,

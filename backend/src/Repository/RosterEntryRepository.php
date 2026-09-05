@@ -96,4 +96,79 @@ class RosterEntryRepository extends ServiceEntityRepository
     {
         return $this->findOneBy(['seasonTeam' => $seasonTeam, 'captain' => true]);
     }
+
+    /**
+     * Each player's *current* squad entry: the one from the most recent season they appear in.
+     *
+     * Ordered newest season first and folded in PHP rather than asked for with a window
+     * function, which DQL does not have. One query for the whole page, whatever its size —
+     * the alternative is a query per player, which is the entire reason this method exists
+     * rather than a getter on the entity.
+     *
+     * Entities are fetch-joined rather than scalars selected, because the caller needs the
+     * position enum and the season's start date, and both of those are values Doctrine
+     * converts on hydration.
+     *
+     * @param list<int> $playerIds
+     *
+     * @return array<int, RosterEntry> player id => their latest entry
+     */
+    public function currentForPlayers(array $playerIds): array
+    {
+        if ([] === $playerIds) {
+            return [];
+        }
+
+        /** @var list<RosterEntry> $rows */
+        $rows = $this->createQueryBuilder('r')
+            ->addSelect('st', 's', 'l', 't')
+            ->innerJoin('r.seasonTeam', 'st')
+            ->innerJoin('st.season', 's')
+            ->innerJoin('s.league', 'l')
+            ->innerJoin('st.team', 't')
+            ->where('IDENTITY(r.player) IN (:players)')
+            ->orderBy('s.startDate', 'DESC')
+            ->addOrderBy('s.id', 'DESC')
+            ->addOrderBy('r.id', 'DESC')
+            ->setParameter('players', $playerIds)
+            ->getQuery()
+            ->getResult();
+
+        $current = [];
+
+        foreach ($rows as $entry) {
+            // First one wins: the rows arrive newest first, so this is "most recent season"
+            // without a second pass and without a comparison that could disagree with the
+            // ORDER BY above.
+            $current[(int) $entry->getPlayer()->getId()] ??= $entry;
+        }
+
+        return $current;
+    }
+
+    /**
+     * One player's whole career, newest season first.
+     *
+     * The same joins as {@see currentForPlayers()} and for the same reason, but unfolded:
+     * the profile page wants every entry, not the latest one.
+     *
+     * @return list<RosterEntry>
+     */
+    public function findForPlayer(Player $player): array
+    {
+        /* @var list<RosterEntry> */
+        return $this->createQueryBuilder('r')
+            ->addSelect('st', 's', 'l', 't')
+            ->innerJoin('r.seasonTeam', 'st')
+            ->innerJoin('st.season', 's')
+            ->innerJoin('s.league', 'l')
+            ->innerJoin('st.team', 't')
+            ->where('r.player = :player')
+            ->orderBy('s.startDate', 'DESC')
+            ->addOrderBy('s.id', 'DESC')
+            ->addOrderBy('r.id', 'DESC')
+            ->setParameter('player', $player)
+            ->getQuery()
+            ->getResult();
+    }
 }

@@ -150,6 +150,12 @@ already changed. `php bin/console messenger:stop-workers` ends it sooner.
 The sign-in page has a second button that opens a season already thirteen rounds deep: twelve
 clubs, full squads, results, a table and a match still being played.
 
+It lands *in* that season, not on a list of organizations. The response carries the ids of the
+seeded organization, league and season alongside the token — ids, because every address in this
+application is built by the client — and the visitor arrives on the season's front page with a
+breadcrumb out to everything else. A visitor dropped three clicks away from the thing they came
+to see mostly does not take them.
+
 It signs in as a **second** account, and that is the point. The seeder makes two: an owner,
 which nothing reaches, and a visitor who is an *administrator*. Everything worth demonstrating
 is open to an administrator — creating leagues, registering clubs, running matches — while
@@ -223,11 +229,19 @@ php bin/console app:seed:demo
 
 Twelve clubs, full squads, a generated calendar and thirteen rounds already played — including
 one match still in progress, one cancelled and two postponed, so every state on the screen has
-something behind it. The command prints the account it created and a password to sign in with.
+something behind it. Every player has a date of birth and a distinct name, and the matches carry
+cards and substitutions as well as goals, so no column on any screen is a row of dashes and no
+feature is demonstrated by data that never exercises it. The command prints the account it
+created and a password to sign in with.
 
 It is deterministic: the same seed produces the same league on every machine, which is what
 makes the table checkable against the results. It is also idempotent — run it twice and the
 second run does nothing. Pass `--flush` to build it again from scratch.
+
+Three seeded engines rather than one, and the split is the point: results, biography and
+cards each draw from their own. `Mt19937` is a sequence, so a new draw anywhere shifts every
+draw after it — widening a list of first names would otherwise silently change every score in
+the league.
 
 Nothing is written straight into the score columns. Every match is started, its goals recorded
 one at a time and then finished, through the same services the API uses, so the demo exercises

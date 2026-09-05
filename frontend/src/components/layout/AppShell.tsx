@@ -37,7 +37,12 @@ export function AppShell() {
             <span className="text-[17px] font-semibold tracking-tight">Kickoff</span>
           </Link>
 
-          <div className="ml-auto flex items-center gap-3">
+          {/*
+            * Tighter on a phone: the brand, a three-way theme toggle, the bell, an avatar
+            * and a labelled button do not fit across 375px, and the label is the only one
+            * of those that is redundant — the icon says the same thing.
+            */}
+          <div className="ml-auto flex items-center gap-2 sm:gap-3">
             <ThemeToggle />
 
             {user ? (
@@ -54,11 +59,12 @@ export function AppShell() {
                 <Button
                   variant="ghost"
                   size="sm"
+                  aria-label="Sign out"
                   onClick={() => logout.mutate()}
                   disabled={logout.isPending}
                 >
                   <LogOut className="size-3.5" />
-                  Sign out
+                  <span className="hidden sm:inline">Sign out</span>
                 </Button>
               </>
             ) : null}

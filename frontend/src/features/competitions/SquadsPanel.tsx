@@ -15,6 +15,7 @@ import {
   type SeasonPath,
 } from '@/api/seasons'
 import { PLAYER_POSITIONS, type PlayerPosition, type RosterEntry } from '@/api/types'
+import { positionLabel } from '@/lib/positions'
 import { EmptyState, LoadingState } from '@/components/data/States'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -22,10 +23,6 @@ import { cn } from '@/lib/cn'
 
 const selectClass =
   'h-9 rounded-[var(--radius-control)] border border-border-strong bg-surface px-2 text-[13px] focus-visible:border-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/25'
-
-function positionLabel(position: PlayerPosition | null): string {
-  return position === null ? '—' : position.charAt(0) + position.slice(1).toLowerCase()
-}
 
 function SquadRow({
   entry,

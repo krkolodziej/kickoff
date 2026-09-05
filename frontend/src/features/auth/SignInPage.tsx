@@ -1,7 +1,7 @@
 import { zodResolver } from '@hookform/resolvers/zod'
 import { useState } from 'react'
 import { useForm } from 'react-hook-form'
-import { Link, useLocation, useNavigate } from 'react-router-dom'
+import { Link } from 'react-router-dom'
 import { z } from 'zod'
 
 import { useDemoSignIn, useLogin } from '@/api/auth'
@@ -20,8 +20,6 @@ type Values = z.infer<typeof schema>
 export function SignInPage() {
   const login = useLogin()
   const demo = useDemoSignIn()
-  const navigate = useNavigate()
-  const location = useLocation()
   const [formError, setFormError] = useState<string | null>(null)
 
   const {
@@ -38,10 +36,9 @@ export function SignInPage() {
     setFormError(null)
 
     try {
+      // No navigation here: RequireAnonymous redirects the moment the session exists, and it
+      // is the only thing that can, so it is the only thing that decides where to.
       await login.mutateAsync(values)
-
-      const from = (location.state as { from?: string } | null)?.from
-      navigate(from ?? '/dashboard', { replace: true })
     } catch (error) {
       setFormError(applyApiErrorToForm(error, setError, ['email', 'password']))
     }
@@ -51,8 +48,10 @@ export function SignInPage() {
     setFormError(null)
 
     try {
+      // Same again: the response says which season to open, the mutation records it, and the
+      // guard does the rest. A visitor dropped on a list of one organization would have to
+      // find the season themselves, and the season is why they pressed this.
       await demo.mutateAsync()
-      navigate('/dashboard', { replace: true })
     } catch {
       // The endpoint answers 404 where the demonstration is switched off and 503 where it has
       // not been prepared yet. Neither is worth explaining to a visitor who only wanted a look

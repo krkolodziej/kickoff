@@ -15,11 +15,21 @@ final readonly class LeagueResource
         public string $slug,
         public string $description,
         public \DateTimeImmutable $createdAt,
+        /**
+         * A league on its own is a name. What makes it worth opening is that there are
+         * seasons inside it, so the list says how many and which one is current — enough for
+         * a row to link straight at the season rather than at another list.
+         */
+        public int $seasonCount = 0,
+        public ?SeasonRefResource $latestSeason = null,
     ) {
     }
 
-    public static function fromEntity(League $league): self
-    {
+    public static function fromEntity(
+        League $league,
+        int $seasonCount = 0,
+        ?SeasonRefResource $latestSeason = null,
+    ): self {
         return new self(
             id: (int) $league->getId(),
             organizationId: (int) $league->getOrganization()->getId(),
@@ -27,6 +37,8 @@ final readonly class LeagueResource
             slug: $league->getSlug(),
             description: $league->getDescription(),
             createdAt: $league->getCreatedAt(),
+            seasonCount: $seasonCount,
+            latestSeason: $latestSeason,
         );
     }
 }

@@ -7,8 +7,10 @@ namespace App\Tests\Api;
 use App\Command\SeedDemoCommand;
 use App\Entity\Organization;
 use App\Entity\OrganizationRole;
+use App\Tests\Factory\LeagueFactory;
 use App\Tests\Factory\OrganizationFactory;
 use App\Tests\Factory\OrganizationMembershipFactory;
+use App\Tests\Factory\SeasonFactory;
 use App\Tests\Factory\UserFactory;
 use Symfony\Bundle\FrameworkBundle\KernelBrowser;
 use Symfony\Bundle\FrameworkBundle\Test\WebTestCase;
@@ -72,6 +74,59 @@ final class DemoApiTest extends WebTestCase
         // client has nothing special to do afterwards.
         $cookie = $this->client->getCookieJar()->get('refresh_token', '/api/v1/token');
         self::assertNotNull($cookie);
+    }
+
+    /**
+     * Where to go, alongside the token.
+     *
+     * A visitor dropped on a list of one organization has to find the season for themselves,
+     * and the season is the entire reason they pressed the button. The ids are resolved from
+     * the visitor's own membership rather than from the seeder's slug, which is what lets
+     * this be tested with two rows instead of by playing seventy matches.
+     */
+    public function testItSaysWhereToGo(): void
+    {
+        $this->bootWithDemo(true);
+        $organization = $this->seedVisitor();
+
+        $league = LeagueFactory::createOne(['organization' => $organization]);
+        $older = SeasonFactory::createOne([
+            'league' => $league,
+            'name' => '2025',
+            'startDate' => new \DateTimeImmutable('2025-03-01'),
+        ]);
+        $latest = SeasonFactory::createOne([
+            'league' => $league,
+            'name' => '2026',
+            'startDate' => new \DateTimeImmutable('2026-03-01'),
+        ]);
+
+        $this->client->request('POST', '/api/v1/auth/demo');
+
+        self::assertResponseIsSuccessful();
+
+        self::assertSame([
+            'organization_id' => $organization->getId(),
+            'league_id' => $league->getId(),
+            'season_id' => $latest->getId(),
+        ], $this->json()['demo'], 'the most recent season, not the first one found');
+
+        self::assertNotSame($older->getId(), $latest->getId());
+    }
+
+    /**
+     * Seeded far enough to have a visitor but not far enough to have a season. The client
+     * falls back to the organization list rather than following a link to nowhere.
+     */
+    public function testItSaysNothingWhenThereIsNoSeasonToEnter(): void
+    {
+        $this->bootWithDemo(true);
+        $this->seedVisitor();
+
+        $this->client->request('POST', '/api/v1/auth/demo');
+
+        self::assertResponseIsSuccessful();
+        self::assertNull($this->json()['demo']);
     }
 
     /**

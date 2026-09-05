@@ -7,9 +7,11 @@ namespace App\Controller\Api;
 use App\Dto\Input\LeagueRequest;
 use App\Dto\Input\ListQuery;
 use App\Dto\Output\LeagueResource;
+use App\Dto\Output\SeasonRefResource;
 use App\Entity\League;
 use App\Repository\LeagueRepository;
 use App\Repository\Listing;
+use App\Repository\SeasonRepository;
 use App\Scope\LeagueScope;
 use App\Scope\OrganizationScope;
 use App\Security\Voter\OrganizationVoter;
@@ -42,6 +44,7 @@ final class LeagueController extends AbstractController
     public function __construct(
         private readonly EntityManagerInterface $entityManager,
         private readonly LeagueRepository $leagues,
+        private readonly SeasonRepository $seasons,
         private readonly Listing $listing,
         private readonly SlugGenerator $slugGenerator,
     ) {
@@ -54,7 +57,9 @@ final class LeagueController extends AbstractController
         $qb = $this->leagues->scopedQuery($scope->organization(), $query);
         $this->listing->sort($qb, $query, self::ORDERING, 'name');
 
-        return $this->json($this->listing->respond($qb, $query, LeagueResource::fromEntity(...)));
+        // respond rather than respond: the season count and the latest season are one
+        // query for the page and would be one query per row through a per-row mapper.
+        return $this->json($this->listing->respond($qb, $query, $this->annotate(...)));
     }
 
     #[Route('', name: 'api_leagues_create', methods: ['POST'])]
@@ -74,7 +79,7 @@ final class LeagueController extends AbstractController
     #[IsGranted(OrganizationVoter::VIEW, subject: 'scope')]
     public function show(LeagueScope $scope): JsonResponse
     {
-        return $this->json(LeagueResource::fromEntity($scope->league()));
+        return $this->json($this->annotate([$scope->league()])[0]);
     }
 
     #[Route('/{leagueId<\d+>}', name: 'api_leagues_update', methods: ['PATCH'])]
@@ -91,7 +96,7 @@ final class LeagueController extends AbstractController
 
         $this->entityManager->flush();
 
-        return $this->json(LeagueResource::fromEntity($league));
+        return $this->json($this->annotate([$league])[0]);
     }
 
     #[Route('/{leagueId<\d+>}', name: 'api_leagues_delete', methods: ['DELETE'])]
@@ -102,6 +107,36 @@ final class LeagueController extends AbstractController
         $this->entityManager->flush();
 
         return new JsonResponse(null, Response::HTTP_NO_CONTENT);
+    }
+
+    /**
+     * Leagues plus what is inside them.
+     *
+     * A league on its own is a name; the season count and the current season are what make a
+     * row worth opening, and they are one query for the whole page.
+     *
+     * @param list<League> $leagues
+     *
+     * @return list<LeagueResource>
+     */
+    private function annotate(array $leagues): array
+    {
+        $seasons = $this->seasons->forLeagues(
+            array_map(static fn (League $league): int => (int) $league->getId(), $leagues),
+        );
+
+        return array_map(
+            static function (League $league) use ($seasons): LeagueResource {
+                $mine = $seasons[(int) $league->getId()] ?? [];
+
+                return LeagueResource::fromEntity(
+                    $league,
+                    seasonCount: \count($mine),
+                    latestSeason: [] === $mine ? null : SeasonRefResource::fromEntity($mine[0]),
+                );
+            },
+            $leagues,
+        );
     }
 
     private function slug(OrganizationScope|LeagueScope $scope, LeagueRequest $payload): string

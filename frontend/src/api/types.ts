@@ -24,6 +24,25 @@ export interface AuthSession {
   user: User
 }
 
+/**
+ * Where the demonstration sign-in wants the visitor to land.
+ *
+ * Ids rather than a path: every address in this application is built on this side, and the
+ * one place the server writes a path — a stored notification's `link` — documents itself as
+ * the exception. Null when the deployment is enabled but has nothing seeded yet, in which
+ * case the caller falls back to the organization list.
+ */
+export interface DemoEntry {
+  organization_id: number
+  league_id: number
+  season_id: number
+}
+
+/** Only `/auth/demo` carries this, which is why it is not an optional field on AuthSession. */
+export interface DemoSession extends AuthSession {
+  demo: DemoEntry | null
+}
+
 export interface LoginPayload {
   email: string
   password: string
@@ -53,6 +72,9 @@ export interface Organization {
   my_role: OrganizationRole
   member_count: number
   created_at: string
+  league_count: number
+  team_count: number
+  player_count: number
 }
 
 export interface Membership {
@@ -74,6 +96,14 @@ export interface AddMemberPayload {
   role: OrganizationRole
 }
 
+/** Enough of a season to name it and to build a link to it. */
+export interface SeasonRef {
+  id: number
+  league_id: number
+  name: string
+  start_date: string
+}
+
 export interface League {
   id: number
   organization_id: number
@@ -81,6 +111,8 @@ export interface League {
   slug: string
   description: string
   created_at: string
+  season_count: number
+  latest_season: SeasonRef | null
 }
 
 export interface Team {
@@ -90,6 +122,28 @@ export interface Team {
   short_name: string
   slug: string
   created_at: string
+  /** The current season's squad, not every player who has ever worn the shirt. */
+  squad_size: number
+  seasons_played: number
+  latest_season: SeasonRef | null
+}
+
+/**
+ * Where a player currently turns out.
+ *
+ * None of this belongs to the person: a number and a position are properties of a squad
+ * entry, and they change when the player does. Null when nobody has registered them.
+ */
+export interface PlayerSquad {
+  season_id: number
+  season_name: string
+  league_id: number
+  team_id: number
+  team_name: string
+  team_short_name: string
+  shirt_number: number | null
+  position: PlayerPosition | null
+  captain: boolean
 }
 
 export interface Player {
@@ -100,6 +154,12 @@ export interface Player {
   full_name: string
   date_of_birth: string | null
   created_at: string
+  current_squad: PlayerSquad | null
+  /** Whole years, computed by the server so that "today" has one definition. */
+  age: number | null
+  goals: number
+  yellow_cards: number
+  red_cards: number
 }
 
 export type PlayerPosition = 'GOALKEEPER' | 'DEFENDER' | 'MIDFIELDER' | 'FORWARD'
@@ -293,6 +353,60 @@ export interface AppNotification {
   organization_name: string
   created_at: string
   read_at: string | null
+}
+
+/**
+ * One line of a club's history.
+ *
+ * `position` is null for every season but the one being played. A club's own record comes
+ * from its own fixtures; where it *finished* needs the whole league table for that season
+ * computed, which is worth doing once and not once per season of history.
+ */
+export interface ClubSeasonRow {
+  season_id: number
+  season_name: string
+  league_id: number
+  league_name: string
+  start_date: string
+  squad_size: number
+  played: number
+  won: number
+  drawn: number
+  lost: number
+  goals_for: number
+  goals_against: number
+  goal_difference: number
+  points: number
+  position: number | null
+}
+
+/** One screen, one request — see the backend's ClubProfile for why it is not three. */
+export interface TeamProfile {
+  team: Team
+  latest_season_id: number | null
+  squad: RosterEntry[]
+  seasons: ClubSeasonRow[]
+}
+
+/** One line of a player's career: where they were registered, and what they did there. */
+export interface PlayerSeasonRow {
+  season_id: number
+  season_name: string
+  league_id: number
+  league_name: string
+  team_id: number
+  team_name: string
+  shirt_number: number | null
+  position: PlayerPosition | null
+  captain: boolean
+  goals: number
+  yellow_cards: number
+  red_cards: number
+}
+
+export interface PlayerProfile {
+  player: Player
+  seasons: PlayerSeasonRow[]
 }
 
 /**
