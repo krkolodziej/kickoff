@@ -207,8 +207,6 @@ its own code rather than another `invalid_credentials` — the one sign-in failu
 apart, and one that leaks nothing. Reads carry an `ETag`, so a client that already has the
 answer is told so instead of being sent it again.
 
-Decisions worth the argument they cost are written down in [docs/DECISIONS.md](docs/DECISIONS.md).
-
 ```bash
 cd frontend
 pnpm run test
@@ -400,7 +398,9 @@ straight back out.
 | 7 | Messenger, notifications, scheduled reminders | ✅ |
 | 8 | Realtime match updates, hardening | ✅ |
 
-Implementation notes, in Polish, with `file:line` references: [`docs/NOTES.md`](docs/NOTES.md).
+Each stage was opened as an issue and closed by a pull request that explains what it chose,
+what it chose against, and what went wrong on the way — the reasoning lives there and in the
+commit messages rather than in a document beside the code.
 
 ---
 

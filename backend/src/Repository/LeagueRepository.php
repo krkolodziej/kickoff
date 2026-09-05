@@ -31,7 +31,7 @@ class LeagueRepository extends ServiceEntityRepository
 
         if (null !== $term = $query->searchTerm()) {
             // LOWER on both sides: PostgreSQL's LIKE is case-sensitive, unlike MySQL's
-            // under a *_ci collation. See docs/NOTES.md on the move to PostgreSQL.
+            // under a *_ci collation, which made this work by accident until the move.
             $qb->andWhere('LOWER(l.name) LIKE :search OR LOWER(l.slug) LIKE :search')
                 ->setParameter('search', '%'.mb_strtolower($term).'%');
         }
