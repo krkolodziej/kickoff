@@ -138,6 +138,8 @@ jobs:
             -e JWT_PASSPHRASE='${{ steps.keys.outputs.passphrase }}' \
             -e JWT_SECRET_KEY_B64='${{ steps.keys.outputs.private }}' \
             -e JWT_PUBLIC_KEY_B64='${{ steps.keys.outputs.public }}' \
+            -e JWT_SECRET_KEY=/app/config/jwt/private.pem \
+            -e JWT_PUBLIC_KEY=/app/config/jwt/public.pem \
             -e MERCURE_JWT_SECRET=ci-only-hub-secret-at-least-256-bits-long-for-hs256 \
             kickoff:ci
 
