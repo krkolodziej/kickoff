@@ -1861,6 +1861,28 @@ Sprawdzone empirycznie, po tym jak wariant z `headers` cicho zwracał zero.
 miał rację — pusta mogła być dopiero kolumna wyciągnięta z tej listy. Asercja poszła tam, gdzie
 naprawdę coś mówi.
 
+### 8.10 Przycisk „wejdź jako demo"
+
+Endpoint, który loguje bez poświadczenia, powinien budzić czujność — więc każdy z trzech
+zamków jest tam z powodu, który da się nazwać.
+
+**Istnieje tylko wtedy, gdy jest włączony.** Domyślnie wyłączony, a gdy jest wyłączony
+odpowiada **404**, nie 403: nieczynny endpoint nie ma powodu ogłaszać, że istnieje.
+
+**Nie da się go wycelować gdzie indziej.** Nie ma parametru — adres konta to stała, więc
+najgorsze, co ten endpoint potrafi, to tyle, co potrafi tamto jedno konto.
+
+**A tamto konto jest administratorem, nie właścicielem.** Skasowanie organizacji wymaga
+`OWNER`, więc odwiedzający może prowadzić ligę, ale nie może zniszczyć tego, co przyszedł
+obejrzeć. Stąd seeder tworzy **dwa** konta zamiast jednego. Test sprawdza obie strony tej
+własności: 403 na usunięcie i 201 na utworzenie ligi.
+
+Detal wdrożeniowy, który wynikł z pomiaru, a nie z przewidywania: pierwszy seed rozgrywa
+siedemdziesiąt kilka meczów przez prawdziwe serwisy i trwa około minuty. Uruchomiony przed
+serwerem nie zdążyłby na health check platformy i deploy zostałby wycofany bez powodu. Idzie
+więc w tle, a endpoint w tym czasie odpowiada `503 demo_not_ready` — i to jest dokładnie ten
+powód, dla którego ta odpowiedź mówi coś konkretnego zamiast udawać 404.
+
 ### Pytania na rozmowę — Stage 8
 
 **Czemu przez hub leci sam identyfikator, a nie mecz?**

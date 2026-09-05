@@ -4,7 +4,7 @@ import { useForm } from 'react-hook-form'
 import { Link, useLocation, useNavigate } from 'react-router-dom'
 import { z } from 'zod'
 
-import { useLogin } from '@/api/auth'
+import { useDemoSignIn, useLogin } from '@/api/auth'
 import { Button } from '@/components/ui/button'
 import { Field } from '@/components/ui/field'
 import { AuthCard, FormError } from '@/features/auth/AuthLayout'
@@ -19,6 +19,7 @@ type Values = z.infer<typeof schema>
 
 export function SignInPage() {
   const login = useLogin()
+  const demo = useDemoSignIn()
   const navigate = useNavigate()
   const location = useLocation()
   const [formError, setFormError] = useState<string | null>(null)
@@ -45,6 +46,20 @@ export function SignInPage() {
       setFormError(applyApiErrorToForm(error, setError, ['email', 'password']))
     }
   })
+
+  const onDemo = async () => {
+    setFormError(null)
+
+    try {
+      await demo.mutateAsync()
+      navigate('/dashboard', { replace: true })
+    } catch {
+      // The endpoint answers 404 where the demonstration is switched off and 503 where it has
+      // not been prepared yet. Neither is worth explaining to a visitor who only wanted a look
+      // around, so the button simply says it is unavailable.
+      setFormError('The demonstration is not available right now.')
+    }
+  }
 
   return (
     <AuthCard
@@ -83,6 +98,27 @@ export function SignInPage() {
           {isSubmitting ? 'Signing in…' : 'Sign in'}
         </Button>
       </form>
+
+      <div className="mt-6 flex items-center gap-3" aria-hidden="true">
+        <span className="h-px flex-1 bg-border" />
+        <span className="text-[11px] uppercase tracking-wide text-foreground-subtle">or</span>
+        <span className="h-px flex-1 bg-border" />
+      </div>
+
+      <Button
+        type="button"
+        variant="outline"
+        size="lg"
+        className="mt-4 w-full"
+        onClick={() => void onDemo()}
+        disabled={demo.isPending}
+      >
+        {demo.isPending ? 'Opening the demo…' : 'Look around a finished season'}
+      </Button>
+
+      <p className="mt-2 text-center text-[12px] text-foreground-muted">
+        Twelve clubs, thirteen rounds played. No account needed.
+      </p>
     </AuthCard>
   )
 }

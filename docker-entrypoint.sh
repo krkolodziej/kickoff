@@ -31,6 +31,22 @@ if [ "${RUN_RELEASE_ON_START:-false}" = "true" ]; then
     php bin/console doctrine:migrations:migrate --no-interaction --allow-no-migration
 fi
 
+# --- demonstration data ---------------------------------------------------------------------
+#
+# In the background, and that is the whole point. The first run plays seventy-odd matches
+# through the real domain services and takes about a minute; done before the server starts, it
+# would miss the platform's health check and the deploy would be rolled back for no reason.
+#
+# So the server comes up immediately and the demo endpoint answers "not prepared yet" until the
+# seeding finishes — which is exactly why that response says something specific instead of 404.
+#
+# Every later start is a single query: the seeder is idempotent and stops as soon as it finds
+# the organization already there.
+if [ "${SEED_DEMO_ON_START:-false}" = "true" ]; then
+    echo "demo: seeding in the background"
+    ( php bin/console app:seed:demo --no-interaction || echo "demo: seeding failed" ) &
+fi
+
 # --- realtime -----------------------------------------------------------------------------
 #
 # The hub runs inside this very process, so the application publishes to itself over the
