@@ -145,6 +145,23 @@ results are recorded, the bell simply never fills, and the messages wait in
 and because a worker holds the container it booted with, so it keeps running code you have
 already changed. `php bin/console messenger:stop-workers` ends it sooner.
 
+### Realtime
+
+A live match updates the moment something happens, over server-sent events, and falls back to a
+three-second timer whenever it cannot. Both are behind one hook, so no component knows which
+is in use.
+
+The hub is **inside the application**: FrankenPHP is Caddy with PHP and Mercure compiled in, so
+production needs no second container. Development has no hub unless one is started, which is
+why `VITE_REALTIME` defaults to polling outside the Docker image.
+
+| | |
+| --- | --- |
+| Topic | `/matches/{id}`, private |
+| Who may listen | decided by the API, per membership, before a token exists |
+| What travels | `{"fixture_id": 41}` — a signal, never the match |
+| If the hub is down | the page keeps working on the timer |
+
 ### Background work
 
 | | |
@@ -164,9 +181,16 @@ transaction is committed or rolled back with it.
 ```bash
 cd backend
 composer test        # PHPUnit
-composer stan        # PHPStan
+composer stan        # PHPStan, level 8
 composer cs          # php-cs-fixer, check only
 ```
+
+Repeated wrong passwords are throttled per address and per account, and answered with `429` and
+its own code rather than another `invalid_credentials` — the one sign-in failure worth telling
+apart, and one that leaks nothing. Reads carry an `ETag`, so a client that already has the
+answer is told so instead of being sent it again.
+
+Decisions worth the argument they cost are written down in [docs/DECISIONS.md](docs/DECISIONS.md).
 
 ```bash
 cd frontend
@@ -357,7 +381,7 @@ straight back out.
 | 5 | Matches, the state machine, goals and cards | ✅ |
 | 6 | Standings, player statistics, demo data | ✅ |
 | 7 | Messenger, notifications, scheduled reminders | ✅ |
-| 8 | Realtime match updates, hardening | |
+| 8 | Realtime match updates, hardening | ✅ |
 
 Implementation notes, in Polish, with `file:line` references: [`docs/NOTES.md`](docs/NOTES.md).
 

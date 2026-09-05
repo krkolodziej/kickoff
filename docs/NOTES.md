@@ -87,6 +87,17 @@ dokumentu rośnie z każdym etapem.
   - [7.6 Worker: Windows i produkcja](#76-worker-windows-i-produkcja)
   - [7.7 Pułapki Stage 7](#77-pułapki-stage-7)
   - [Pytania na rozmowę](#pytania-na-rozmowę--stage-7)
+- [Stage 8 — Realtime i hardening](#stage-8--realtime-i-hardening)
+  - [8.1 Hub w tym samym procesie](#81-hub-w-tym-samym-procesie)
+  - [8.2 Cienkie zdarzenia](#82-cienkie-zdarzenia)
+  - [8.3 Token na jeden temat, w ciasteczku](#83-token-na-jeden-temat-w-ciasteczku)
+  - [8.4 Publikacja przez kolejkę](#84-publikacja-przez-kolejkę)
+  - [8.5 Degradacja jest funkcją, nie awarią](#85-degradacja-jest-funkcją-nie-awarią)
+  - [8.6 Limit prób logowania](#86-limit-prób-logowania)
+  - [8.7 Żądania warunkowe](#87-żądania-warunkowe)
+  - [8.8 PHPStan 6 → 8](#88-phpstan-6--8)
+  - [8.9 Pułapki Stage 8](#89-pułapki-stage-8)
+  - [Pytania na rozmowę](#pytania-na-rozmowę--stage-8)
 - [Wdrożenie](#wdrożenie)
   - [D.1 Dlaczego PostgreSQL](#d1-dlaczego-postgresql)
   - [D.2 Co znalazła zmiana bazy](#d2-co-znalazła-zmiana-bazy)
@@ -1704,6 +1715,172 @@ której nikt nie uruchamia.
 
 ---
 
+## Stage 8 — Realtime i hardening
+
+### 8.1 Hub w tym samym procesie
+
+FrankenPHP to Caddy z wkompilowanym PHP **i Mercure**. Sprawdzone, nie założone — w
+`caddy/frankenphp/main.go` stoi `_ "github.com/dunglas/mercure/caddy"`. Realtime nie potrzebuje
+więc drugiego kontenera, drugiego procesu ani drugiej rzeczy do wdrożenia. Ta decyzja zapadła
+trzy etapy wcześniej, przy wyborze obrazu, i dopiero teraz się opłaciła.
+
+Konfiguracja huba trafia do `Caddyfile.d/mercure.caddyfile`, a nie do podmienionego
+`Caddyfile`. Domyślny plik kończy się `import Caddyfile.d/*.caddyfile` właśnie po to, żeby
+dodatki nie musiały go forkować i potem rozjeżdżać się z nim przy każdej aktualizacji obrazu.
+
+`MERCURE_URL` liczy się w entrypoincie, bo port nadaje Render dopiero przy starcie. Aplikacja
+publikuje sama do siebie po pętli zwrotnej; `MERCURE_PUBLIC_URL` to **ścieżka**, nie adres —
+przeglądarka rozwiązuje ją względem origin, na którym już jest, więc nic nie musi znać nazwy
+hosta wdrożenia.
+
+### 8.2 Cienkie zdarzenia
+
+Przez hub leci `{"fixture_id": 41}` i nic więcej. To decyzja, nie skrót.
+
+**Autoryzacja zostaje w jednym miejscu.** Temat jest bytem gruboziarnistym: wolno go
+subskrybować albo nie. REST API już rozstrzyga, per żądanie i per rola, co komu wolno zobaczyć.
+Przepychanie meczu przez hub oznaczałoby utrzymywanie **drugiej, słabszej** odpowiedzi na to
+samo pytanie — a dwie odpowiedzi się rozjeżdżają.
+
+**Strumień nie może się zestarzeć.** Ładunek opisuje moment, sygnał opisuje fakt. Dwie
+aktualizacje, które przyjdą nie po kolei, zostawiają klienta z dwoma pobraniami, a nie z
+wyrenderowaniem starszego stanu.
+
+Zysk to różnica między „w ciągu trzech sekund" a „natychmiast", nie oszczędność żądania.
+
+### 8.3 Token na jeden temat, w ciasteczku
+
+Hub nie wie nic o organizacjach, członkostwach ani rolach — sprawdza wyłącznie, czy token
+subskrybenta wymienia żądany temat. Decyzja zapada więc tam, gdzie aplikacja i tak umie ją
+podjąć: `FixtureScope` rozwiązuje mecz przez członkostwo dzwoniącego, więc obcy dostaje **404,
+zanim jakikolwiek token powstanie**.
+
+Token wymienia **dokładnie jeden temat**. Nie wildcard, nie sezon: token na tyle szeroki, żeby
+był wygodny, przeżywa powód, dla którego został wydany. Test sprawdza to na roszczeniach JWT, a
+nie na wywołaniu, które je zbudowało — i przy okazji, że nie ma w nim prawa `publish`.
+
+Jedzie w ciasteczku httpOnly, z powodu praktycznego i z powodu bezpieczeństwa. `EventSource`
+nie umie ustawić nagłówka żądania, więc token w ciele odpowiedzi musiałby wylądować w query
+stringu, czyli w logach i w historii. A poza tym obowiązuje ten sam argument, który trzyma
+refresh token poza zasięgiem JavaScriptu.
+
+Bundle zresztą tego pilnuje: przy `MERCURE_PUBLIC_URL` wskazującym inną domenę drugiego poziomu
+**odmawia wystawienia ciasteczka**. Złapało to przykładowy `example.com`, który został w `.env`
+z recepty.
+
+### 8.4 Publikacja przez kolejkę
+
+Publikacja do huba to żądanie HTTP, którego **nie da się cofnąć**. Wysłanie go z serwisu, który
+właśnie zmienił dane, oznaczałoby gola na czyimś ekranie, którego baza potem nie przyjęła.
+
+Więc serwis wysyła `MatchUpdated` — wiadomość, wewnątrz transakcji, na transporcie Doctrine —
+a publikuje dopiero handler. Kolejka daje tu semantykę „po zatwierdzeniu i tylko wtedy", której
+hub nie ma. To ta sama gwarancja co w Stage 7, użyta w drugą stronę: tam chodziło o to, żeby
+wiadomość zniknęła razem ze zmianą, tu o to, żeby skutek uboczny nastąpił **po** niej.
+
+Koszt: opóźnienie workera, rzędu sekundy. Wciąż trzykrotnie mniej niż polling, i cena za to, że
+ekran nigdy nie wyprzedzi bazy.
+
+### 8.5 Degradacja jest funkcją, nie awarią
+
+`useLiveMatch` ma jedną obietnicę: **nigdy nie zostawia wywołującego bez aktualizacji**. Flaga
+wyłączona, endpoint tokenu odmawia, hub nieosiągalny, hub padł w połowie meczu — każdy z tych
+przypadków kończy się `polling`, a timery ruszają z powrotem.
+
+`EventSource` sam się wznawia, ale hub, który zniknął, zostawiłby stronę cicho nieaktualną na
+czas prób. Dlatego `onerror` zamyka połączenie i wraca do timerów od razu.
+
+Transport jest zwracany wyłącznie po to, żeby interfejs mógł go pokazać — w tooltipie, nie w
+etykiecie, bo dla czytelnika to bez różnicy. Ma znaczenie dopiero, gdy ktoś zgłasza, że mecz
+„przestał się odświeżać": pierwsze sensowne pytanie brzmi, na którym transporcie był.
+
+### 8.6 Limit prób logowania
+
+`login_throttling` na firewallu, nie w kontrolerze — authenticator działa, zanim jakikolwiek
+kontroler dojdzie do głosu.
+
+Limit jest per adres **i** per konto, co ma znaczenie w obie strony. Sam per konto pozwala
+botnetowi rozłożyć próby po adresach; sam per adres blokuje całe biuro za jednym NAT-em, gdy
+ktoś się pomyli.
+
+Przekroczenie limitu to **429 z własnym kodem**, nie kolejne „invalid credentials". To jedyna
+porażka logowania, którą warto odróżnić, i nic nie zdradza: mówi o częstotliwości prób z tego
+adresu, a nie o tym, czy konto istnieje. Bez tego człowiek przepisuje hasło, które było
+poprawne, a klient wali dalej.
+
+### 8.7 Żądania warunkowe
+
+ETag liczony z **bajtów, które i tak miały pójść**, nie z czegokolwiek o danych za nimi. To
+słabsza wersja cache'owania — serwer wykonuje całą pracę i oszczędza wyłącznie transfer — i
+wybrana świadomie: tag wyprowadzony z „kiedy ten sezon ostatnio się zmienił" wymaga czegoś, co
+utrzyma ten znacznik w prawdzie, a nieaktualny serwuje złą odpowiedź z pełnym przekonaniem.
+Ten nie może się pomylić: inne bajty, inny tag.
+
+`private`, bo to są odpowiedzi o organizacjach konkretnej osoby — wspólny cache trzymający je
+byłby wyciekiem, nie optymalizacją. Odpowiedzi ustawiające ciasteczko są pomijane: 304
+zgubiłoby nagłówek, dla którego to żądanie istniało.
+
+### 8.8 PHPStan 6 → 8
+
+Sześć błędów na całym projekcie, wszystkie sensowne, żaden nieuciszony.
+
+Dwa realne: `max()` na liście, która może być pusta (fatal, nie ostrzeżenie), i wywołanie
+metody na `Profile|null`. Jeden wymusił nazwanie niezmiennika — `getUserIdentifier()` ma
+zwracać niepusty łańcuch, więc teraz mówi to wprost i rzuca, zamiast zakładać. Trzy to
+asercje, które nic nie sprawdzały, bo analizator już dowiódł ich prawdziwości.
+
+Wniosek warty zapamiętania: poziom 8 nie jest ceremonią przy kodzie, który od początku ma
+typy. Kosztował godzinę i znalazł dwa błędy, których żaden test nie szukał.
+
+### 8.9 Pułapki Stage 8
+
+**Nowy test potrafi zabić sto niepowiązanych.** Testy limitu logowania wyczerpały pulę adresu
+`127.0.0.1`, z którego loguje się cały pakiet — 104 błędy w testach, których nie tknąłem.
+Limiter liczy per adres, więc te testy dostały własne adresy z puli dokumentacyjnej.
+
+**A licznik przeżywa uruchomienie pakietu**, bo siedzi w cache'u, którego `ResetDatabase` nie
+dotyka. Test przechodził raz, a potem padał do końca minuty — i przechodził znowu później, bez
+niczyjej zmiany. Czyszczenie puli przed testem załatwia sprawę; bez tego byłby to klasyczny
+test „migający".
+
+**Nazwa klasy wiadomości jest w `body`, nie w `headers`.** Domyślny serializer zapisuje
+zserializowaną kopertę, więc liczenie wiadomości po typie robi się przez dopasowanie do ciała.
+Sprawdzone empirycznie, po tym jak wariant z `headers` cicho zwracał zero.
+
+**`assertCount` już zawęża typ.** PHPStan przyjął `assertNotEmpty($fixtures)` jako zbędne i
+miał rację — pusta mogła być dopiero kolumna wyciągnięta z tej listy. Asercja poszła tam, gdzie
+naprawdę coś mówi.
+
+### Pytania na rozmowę — Stage 8
+
+**Czemu przez hub leci sam identyfikator, a nie mecz?**
+Bo temat jest gruboziarnisty — wolno go subskrybować albo nie — a REST API już rozstrzyga
+dostęp per rola. Przepychanie danych przez hub to druga, słabsza odpowiedź na to samo pytanie,
+a dwie odpowiedzi się rozjeżdżają. Do tego sygnał opisuje fakt, więc nie może się zestarzeć w
+drodze.
+
+**Dlaczego publikacja idzie przez kolejkę, a nie wprost z serwisu?**
+Bo żądania HTTP nie da się wycofać. Wysłane z wnętrza transakcji, która potem padnie, zostawia
+gola na ekranie i nic w bazie. Wiadomość na transporcie Doctrine wycofuje się razem ze zmianą,
+więc skutek uboczny następuje po zatwierdzeniu i tylko wtedy.
+
+**Token subskrybenta w ciasteczku czy w URL-u?**
+W ciasteczku, httpOnly. `EventSource` nie ustawia nagłówków, więc alternatywą jest query
+string, czyli logi i historia przeglądarki. Ten sam argument, który trzyma refresh token poza
+JavaScriptem — i przy okazji wymusza jeden origin, czego bundle zresztą pilnuje.
+
+**Co się dzieje, gdy hub padnie w trakcie meczu?**
+Hook zamyka połączenie i wraca do pollingu; strona działa dalej, tylko wolniej. Realtime, które
+psuje stronę, gdy hub znika, jest gorsze niż brak realtime — dlatego polling nigdy nie został
+usunięty, tylko schowany za tym samym interfejsem.
+
+**Jak liczysz ETag i dlaczego nie z daty modyfikacji?**
+Ze skrótu bajtów odpowiedzi. Tag wyprowadzony ze znacznika czasu wymaga, żeby ktoś ten znacznik
+utrzymywał w prawdzie, a pomyłka serwuje złą odpowiedź z przekonaniem. Skrót treści nie ma jak
+skłamać — kosztuje za to całą pracę serwera, oszczędza wyłącznie transfer.
+
+---
+
 ## Wdrożenie
 
 ### D.1 Dlaczego PostgreSQL
@@ -2055,6 +2232,10 @@ Tabela rośnie z każdym etapem.
 | `celery worker` | `messenger:consume` z `--time-limit` | `dev.ps1`, `docker-entrypoint.sh` |
 | martwe zadania w `django-celery-results` | `failure_transport` + `messenger:failed:show` | `config/packages/messenger.yaml` |
 | `get_or_create(dedupe_key=...)` | unikalny indeks + sprawdzenie przed zapisem | `src/Domain/Notification/Notifier.php` |
+| Django Channels / WebSocket | Mercure (SSE) wbudowany w FrankenPHP | `docker/mercure.caddyfile` |
+| `django-ratelimit` / `AxesBackend` | `login_throttling` na firewallu | `config/packages/security.yaml` |
+| `@condition` / `ETag` middleware | listener na `kernel.response` | `src/EventSubscriber/ETagSubscriber.php` |
+| `mypy --strict` | PHPStan level 8 | `phpstan.dist.neon` |
 | `transaction.atomic()` wokół zdarzenia i wyniku | `EntityManager::wrapInTransaction()` | `src/Domain/Match/MatchEventRecorder.php` |
 | `django.utils.timezone.now()` | `Psr\Clock\ClockInterface` (podmienialny na `MockClock`) | `src/Domain/Match/MatchLifecycle.php` |
 | `TextChoices` + `ALLOWED_TRANSITIONS` w serwisie | metoda na backed enumie | `src/Entity/MatchStatus.php` |

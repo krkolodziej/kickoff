@@ -31,6 +31,17 @@ if [ "${RUN_RELEASE_ON_START:-false}" = "true" ]; then
     php bin/console doctrine:migrations:migrate --no-interaction --allow-no-migration
 fi
 
+# --- realtime -----------------------------------------------------------------------------
+#
+# The hub runs inside this very process, so the application publishes to itself over the
+# loopback. The port is not known until Render sets it, which is why this is computed here
+# rather than declared as a static environment variable.
+#
+# The public URL is a path, not an absolute address: the browser resolves it against the origin
+# it is already on, so nothing has to know the deployment's hostname.
+export MERCURE_URL="http://127.0.0.1:${PORT:-8080}/.well-known/mercure"
+export MERCURE_PUBLIC_URL="/.well-known/mercure"
+
 # --- background work ---------------------------------------------------------------------
 #
 # The worker runs beside the web server in the same container, because a separate background

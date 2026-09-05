@@ -81,6 +81,14 @@ class User implements UserInterface, PasswordAuthenticatedUserInterface
      */
     public function getUserIdentifier(): string
     {
+        // Stating the invariant instead of assuming it. Symfony documents this as a non-empty
+        // string, and an empty one would ask the provider to look up an account by nothing at
+        // all — so if it ever happened, failing here beats failing somewhere inside the
+        // firewall with no clue why.
+        if ('' === $this->email) {
+            throw new \LogicException('A user without an email address cannot be identified.');
+        }
+
         return $this->email;
     }
 

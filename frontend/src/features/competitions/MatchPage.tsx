@@ -3,12 +3,12 @@ import { useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
 
 import { ApiError } from '@/api/client'
-import { useMatch, useMatchEvents, useMatchTransition, useRecordEvent } from '@/api/match'
+import { useLiveMatch, useMatchTransition, useRecordEvent } from '@/api/match'
+import type { Transport } from '@/api/realtime'
 import { useOrganization } from '@/api/organizations'
 import { useSquadOf, type SeasonPath } from '@/api/seasons'
 import {
   canManage,
-  isLive,
   MATCH_EVENT_TYPES,
   type Fixture,
   type MatchEventType,
@@ -202,6 +202,31 @@ function EventForm({
   )
 }
 
+/**
+ * Says that the page is keeping itself up to date, and how.
+ *
+ * The "how" is a tooltip rather than a label because it is not the reader's problem: whether
+ * updates arrive over a stream or on a three-second timer, the screen behaves the same. It is
+ * worth being able to see, though — when somebody reports that a match "stopped updating",
+ * the first useful question is which transport they were on.
+ */
+function LiveIndicator({ transport }: { transport: Transport }) {
+  return (
+    <span
+      className="inline-flex items-center gap-1.5 text-[12px] font-medium text-danger"
+      title={transport === 'stream' ? 'Updating over a live stream' : 'Updating every few seconds'}
+    >
+      <span className="relative flex size-2">
+        {transport === 'stream' ? (
+          <span className="absolute inline-flex size-full animate-ping rounded-full bg-danger opacity-60" />
+        ) : null}
+        <span className="relative inline-flex size-2 rounded-full bg-danger" />
+      </span>
+      Live
+    </span>
+  )
+}
+
 export function MatchPage() {
   const params = useParams()
   const path: SeasonPath = {
@@ -212,9 +237,8 @@ export function MatchPage() {
   const fixtureId = Number(params.fixtureId)
 
   const { data: organization } = useOrganization(path.organizationId)
-  const { data: fixture, isPending, error, refetch } = useMatch(path, fixtureId)
-  const live = fixture ? isLive(fixture) : false
-  const events = useMatchEvents(path, fixtureId, live)
+  const { match, events, live, transport } = useLiveMatch(path, fixtureId)
+  const { data: fixture, isPending, error, refetch } = match
   const transition = useMatchTransition(path, fixtureId)
   const [transitionError, setTransitionError] = useState<string | null>(null)
 
@@ -247,6 +271,8 @@ export function MatchPage() {
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div className="flex items-center gap-3">
             <MatchStatusBadge status={fixture.status} />
+
+            {live ? <LiveIndicator transport={transport} /> : null}
             <span className="text-[13px] text-foreground-muted">
               Round {fixture.round_number} · {formatKickOff(fixture.kick_off_at)}
             </span>

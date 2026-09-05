@@ -153,7 +153,14 @@ final class SeedDemoCommand extends Command
 
         $io->section('Calendar');
         $calendar = $this->fixtures->generate($season, doubleRound: true, firstRoundOn: $season->getStartDate(), daysBetweenRounds: 7);
-        $io->text(\sprintf('%d fixtures across %d rounds.', \count($calendar), max(array_map(static fn (Fixture $f): int => $f->getRoundNumber(), $calendar))));
+        // `max()` on an empty array is fatal, and a season with too few clubs produces no
+        // calendar at all. Unlikely here, but the guard costs a line and without it the crash
+        // would come out of a progress message rather than out of anything that matters.
+        $rounds = [] === $calendar
+            ? 0
+            : max(array_map(static fn (Fixture $f): int => $f->getRoundNumber(), $calendar));
+
+        $io->text(\sprintf('%d fixtures across %d rounds.', \count($calendar), $rounds));
 
         $io->section('Results');
         $this->playSeason($io, $calendar, $squads);

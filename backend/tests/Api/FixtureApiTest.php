@@ -50,7 +50,10 @@ final class FixtureApiTest extends ApiTestCase
 
         $fixtures = $this->jsonList();
         self::assertCount(132, $fixtures);
-        self::assertSame(22, max(array_column($fixtures, 'round_number')));
+
+        $rounds = array_column($fixtures, 'round_number');
+        self::assertNotEmpty($rounds);
+        self::assertSame(22, max($rounds));
     }
 
     public function testASingleRoundIsHalfOfThat(): void
@@ -61,7 +64,10 @@ final class FixtureApiTest extends ApiTestCase
 
         $fixtures = $this->jsonList();
         self::assertCount(66, $fixtures);
-        self::assertSame(11, max(array_column($fixtures, 'round_number')));
+
+        $rounds = array_column($fixtures, 'round_number');
+        self::assertNotEmpty($rounds);
+        self::assertSame(11, max($rounds));
         self::assertSame([1], array_values(array_unique(array_column($fixtures, 'leg'))));
     }
 

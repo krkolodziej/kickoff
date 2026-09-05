@@ -17,6 +17,11 @@ COPY frontend/package.json frontend/pnpm-lock.yaml ./
 RUN pnpm install --frozen-lockfile
 
 COPY frontend/ ./
+
+# The production image always has a hub, so the build that goes into it always tries the
+# stream first. A checkout without one falls back to polling, which is why this is a build-time
+# decision rather than something the browser has to discover by failing.
+ENV VITE_REALTIME=mercure
 RUN pnpm run build
 
 
@@ -72,6 +77,9 @@ RUN APP_SECRET=build-only \
     JWT_PASSPHRASE=build-only \
     php bin/console cache:warmup --no-interaction \
     && rm -rf var/cache/dev var/log/*
+
+# Extends the image's Caddyfile through its own import directory rather than replacing it.
+COPY docker/mercure.caddyfile /etc/caddy/Caddyfile.d/mercure.caddyfile
 
 COPY docker-entrypoint.sh /usr/local/bin/kickoff-entrypoint
 RUN chmod +x /usr/local/bin/kickoff-entrypoint

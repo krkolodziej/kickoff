@@ -273,6 +273,7 @@ final class SquadApiTest extends ApiTestCase
 
         $profile = $this->client->getProfile();
         self::assertNotFalse($profile);
+        self::assertNotNull($profile, 'the profiler has to be collecting for this to mean anything');
 
         $collector = $profile->getCollector('db');
         self::assertInstanceOf(DoctrineDataCollector::class, $collector);

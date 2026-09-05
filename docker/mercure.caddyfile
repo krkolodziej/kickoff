@@ -1,0 +1,20 @@
+# The realtime hub, served by the same process as the API and the SPA.
+#
+# Dropped into Caddyfile.d/ rather than replacing the image's Caddyfile: the default one ends
+# with `import Caddyfile.d/*.caddyfile` precisely so that additions do not have to fork it and
+# then drift from it on the next base image.
+#
+# FrankenPHP is Caddy with both PHP and Mercure compiled in, which is why realtime here needs
+# no second container, no second process and no second thing to deploy. That was decided back
+# when the image was chosen, several stages before anything used it.
+mercure {
+    # Publisher and subscriber tokens are signed with the same secret because the same
+    # application mints both: it publishes updates, and it hands out narrow subscriber tokens
+    # after deciding — through the ordinary membership rules — who may watch what.
+    publisher_jwt {env.MERCURE_JWT_SECRET}
+    subscriber_jwt {env.MERCURE_JWT_SECRET}
+
+    # No `anonymous`. Every update this application sends is private, so a subscriber without
+    # a token naming the topic receives nothing at all — which is the whole authorisation
+    # model: the hub checks the token, the application decides what goes in it.
+}

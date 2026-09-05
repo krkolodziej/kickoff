@@ -32,6 +32,7 @@ framework:
 
         routing:
             App\Message\MatchFinished: async
+            App\Message\MatchUpdated: async
             App\Message\SendKickOffReminders: async
 
 when@test:

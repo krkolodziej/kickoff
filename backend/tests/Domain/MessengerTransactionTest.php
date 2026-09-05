@@ -7,6 +7,8 @@ namespace App\Tests\Domain;
 use App\Domain\Match\MatchLifecycle;
 use App\Entity\Fixture;
 use App\Entity\MatchStatus;
+use App\Message\MatchFinished;
+use App\Message\MatchUpdated;
 use App\Tests\Factory\LeagueFactory;
 use App\Tests\Factory\OrganizationFactory;
 use App\Tests\Factory\SeasonFactory;
@@ -48,17 +50,21 @@ final class MessengerTransactionTest extends KernelTestCase
         $this->lifecycle = $container->get(MatchLifecycle::class);
     }
 
-    public function testFinishingAMatchQueuesAMessage(): void
+    public function testFinishingAMatchQueuesTheNotification(): void
     {
         $fixture = $this->fixture();
 
-        self::assertSame(0, $this->queued());
+        self::assertSame(0, $this->queued(MatchFinished::class));
 
+        // Starting a match streams a signal to anybody watching, but there is no result to
+        // announce yet — which is why the two are counted separately rather than in total.
         $this->lifecycle->start($fixture);
-        self::assertSame(0, $this->queued(), 'starting a match announces nothing');
+        self::assertSame(0, $this->queued(MatchFinished::class), 'nothing to report yet');
+        self::assertSame(1, $this->queued(MatchUpdated::class), 'but watchers are told it began');
 
         $this->lifecycle->finish($fixture);
-        self::assertSame(1, $this->queued());
+        self::assertSame(1, $this->queued(MatchFinished::class));
+        self::assertSame(2, $this->queued(MatchUpdated::class));
     }
 
     /**
@@ -94,7 +100,7 @@ final class MessengerTransactionTest extends KernelTestCase
             // expected
         }
 
-        self::assertSame($before, $this->queued(), 'the message rolled back with the result');
+        self::assertSame($before, $this->queued(), 'every message rolled back with the result');
 
         $this->entityManager->clear();
         $reloaded = $this->entityManager->find(Fixture::class, $fixture->getId());
@@ -106,11 +112,32 @@ final class MessengerTransactionTest extends KernelTestCase
         );
     }
 
-    private function queued(): int
+    /**
+     * Counted straight out of the transport's own table, and by message type.
+     *
+     * The class name lives in the `headers` column, which is how Messenger knows what to
+     * deserialise a row into. Reading it here keeps the test honest: it asks the database
+     * what is queued rather than asking Messenger what it thinks it sent.
+     *
+     * @param class-string|null $type
+     */
+    private function queued(?string $type = null): int
     {
+        if (null === $type) {
+            return (int) $this->connection->fetchOne(
+                'SELECT COUNT(*) FROM messenger_messages WHERE queue_name = :queue',
+                ['queue' => 'async'],
+            );
+        }
+
+        // The default transport serializer writes a serialized Envelope into `body`, and the
+        // message's class name appears in it verbatim. Matching on the short name keeps the
+        // pattern free of the backslashes that LIKE would otherwise treat as escapes.
+        $shortName = substr((string) strrchr($type, '\\'), 1);
+
         return (int) $this->connection->fetchOne(
-            'SELECT COUNT(*) FROM messenger_messages WHERE queue_name = :queue',
-            ['queue' => 'async'],
+            'SELECT COUNT(*) FROM messenger_messages WHERE queue_name = :queue AND body LIKE :type',
+            ['queue' => 'async', 'type' => '%'.$shortName.'%'],
         );
     }
 
