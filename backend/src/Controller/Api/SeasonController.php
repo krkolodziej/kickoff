@@ -47,7 +47,9 @@ final class SeasonController extends AbstractController
         // Newest first: the season somebody wants is almost always the current one.
         $this->listing->sort($qb, $query, self::ORDERING, '-start_date');
 
-        return $this->json($this->listing->respond($qb, $query, SeasonResource::fromEntity(...)));
+        // Nothing to annotate: a season answers for itself, so the page maps straight through.
+        // Lists whose rows need a joined fact use this hook to fetch it once for the page.
+        return $this->json($this->listing->respond($qb, $query, $this->resources(...)));
     }
 
     #[Route('', name: 'api_seasons_create', methods: ['POST'])]
@@ -113,5 +115,15 @@ final class SeasonController extends AbstractController
                 ['name' => ['This league already has a season with that name.']],
             );
         }
+    }
+
+    /**
+     * @param list<Season> $seasons
+     *
+     * @return list<SeasonResource>
+     */
+    private function resources(array $seasons): array
+    {
+        return array_map(SeasonResource::fromEntity(...), $seasons);
     }
 }

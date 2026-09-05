@@ -134,6 +134,32 @@ export function LeaguesPanel({
         <span className="text-foreground-muted">{league.description || '—'}</span>
       ),
     },
+    {
+      key: 'seasons',
+      header: 'Seasons',
+      align: 'right',
+      render: (league) => (
+        <span className="font-semibold tabular-nums">{league.season_count}</span>
+      ),
+    },
+    {
+      // The point of the column: a league row that links only to another list is a step
+      // nobody wanted. This one goes where the reader was heading anyway.
+      key: 'latest',
+      header: 'Latest',
+      align: 'right',
+      render: (league) =>
+        league.latest_season ? (
+          <Link
+            to={`/organizations/${organizationId}/leagues/${league.id}/seasons/${league.latest_season.id}/overview`}
+            className="font-medium hover:text-primary"
+          >
+            {league.latest_season.name}
+          </Link>
+        ) : (
+          <span className="text-foreground-subtle">—</span>
+        ),
+    },
   ]
 
   return (

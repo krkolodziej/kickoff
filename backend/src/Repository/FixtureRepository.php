@@ -9,6 +9,7 @@ use App\Entity\Fixture;
 use App\Entity\MatchStatus;
 use App\Entity\OrganizationRole;
 use App\Entity\Season;
+use App\Entity\Team;
 use App\Entity\User;
 use Doctrine\Bundle\DoctrineBundle\Repository\ServiceEntityRepository;
 use Doctrine\Persistence\ManagerRegistry;
@@ -224,5 +225,75 @@ class FixtureRepository extends ServiceEntityRepository
             ->getResult();
 
         return $fixtures;
+    }
+
+    /**
+     * One club's results, season by season, as two rows per season.
+     *
+     * The same shape and the same limitation as {@see seasonAggregates()}: a fixture stores
+     * one club in `home_team_id` and the other in `away_team_id`, so a grouped query only
+     * ever sees a club from one side of the pitch, and DQL has no UNION to join the two.
+     * Hence a home-side pass and an away-side pass, grouped by season, added up by the
+     * caller — two queries for a whole career, however long it is.
+     *
+     * Only FINISHED counts, because points are awarded at full time.
+     *
+     * @return array<int, list<SideAggregate>> season id => that season's side rows
+     */
+    public function seasonAggregatesForTeam(Team $team): array
+    {
+        $bySeason = [];
+
+        foreach ([true, false] as $home) {
+            foreach ($this->aggregateOneSideForTeam($team, $home) as $seasonId => $aggregate) {
+                $bySeason[$seasonId][] = $aggregate;
+            }
+        }
+
+        return $bySeason;
+    }
+
+    /**
+     * @return array<int, SideAggregate>
+     */
+    private function aggregateOneSideForTeam(Team $team, bool $home): array
+    {
+        $side = $home ? 'homeTeam' : 'awayTeam';
+        $mine = $home ? 'f.homeScore' : 'f.awayScore';
+        $theirs = $home ? 'f.awayScore' : 'f.homeScore';
+
+        /** @var list<array{seasonId: int|string, played: int|string, won: int|string, drawn: int|string, lost: int|string, goalsFor: int|string|null, goalsAgainst: int|string|null}> $rows */
+        $rows = $this->createQueryBuilder('f')
+            ->select('IDENTITY(f.season) AS seasonId')
+            ->addSelect('COUNT(f.id) AS played')
+            ->addSelect(\sprintf('SUM(CASE WHEN %s > %s THEN 1 ELSE 0 END) AS won', $mine, $theirs))
+            ->addSelect(\sprintf('SUM(CASE WHEN %s = %s THEN 1 ELSE 0 END) AS drawn', $mine, $theirs))
+            ->addSelect(\sprintf('SUM(CASE WHEN %s < %s THEN 1 ELSE 0 END) AS lost', $mine, $theirs))
+            ->addSelect(\sprintf('SUM(%s) AS goalsFor', $mine))
+            ->addSelect(\sprintf('SUM(%s) AS goalsAgainst', $theirs))
+            ->where(\sprintf('f.%s = :team', $side))
+            ->andWhere('f.status = :finished')
+            ->groupBy('f.season')
+            ->setParameter('team', $team)
+            ->setParameter('finished', MatchStatus::Finished)
+            ->getQuery()
+            ->getArrayResult();
+
+        $aggregates = [];
+
+        foreach ($rows as $row) {
+            // Every aggregate arrives as text — see aggregateOneSide() for why.
+            $aggregates[(int) $row['seasonId']] = new SideAggregate(
+                teamId: (int) $team->getId(),
+                played: (int) $row['played'],
+                won: (int) $row['won'],
+                drawn: (int) $row['drawn'],
+                lost: (int) $row['lost'],
+                goalsFor: (int) $row['goalsFor'],
+                goalsAgainst: (int) $row['goalsAgainst'],
+            );
+        }
+
+        return $aggregates;
     }
 }

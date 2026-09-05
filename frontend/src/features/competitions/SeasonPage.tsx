@@ -1,4 +1,4 @@
-import { ChevronLeft } from 'lucide-react'
+import { ChevronRight } from 'lucide-react'
 import { Outlet, useParams } from 'react-router-dom'
 
 import { ApiError } from '@/api/client'
@@ -48,13 +48,29 @@ export function SeasonPage() {
   return (
     <div className="flex flex-col gap-6">
       <div>
-        <Link
-          to={`/organizations/${path.organizationId}/leagues/${path.leagueId}`}
-          className="mb-4 inline-flex items-center gap-1 text-[13px] text-foreground-muted transition-colors hover:text-foreground"
+        {/*
+          * Two segments rather than one unlabelled hop back. A visitor who arrived here from
+          * the demonstration button has not seen the organization or the league yet, and a
+          * chevron pointing at "Back" tells them nothing about where back is.
+          */}
+        <nav
+          aria-label="Breadcrumb"
+          className="mb-4 flex items-center gap-1.5 text-[13px] text-foreground-muted"
         >
-          <ChevronLeft className="size-3.5" />
-          {league?.name ?? 'Back'}
-        </Link>
+          <Link
+            to={`/organizations/${path.organizationId}/leagues`}
+            className="truncate transition-colors hover:text-foreground"
+          >
+            {organization?.name ?? 'Organization'}
+          </Link>
+          <ChevronRight aria-hidden="true" className="size-3.5 shrink-0 text-foreground-subtle" />
+          <Link
+            to={`/organizations/${path.organizationId}/leagues/${path.leagueId}`}
+            className="truncate transition-colors hover:text-foreground"
+          >
+            {league?.name ?? 'League'}
+          </Link>
+        </nav>
 
         <PageHeading
           eyebrow="Season"

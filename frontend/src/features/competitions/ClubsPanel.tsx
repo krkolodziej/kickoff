@@ -2,6 +2,7 @@ import { zodResolver } from '@hookform/resolvers/zod'
 import { Plus, Trash2 } from 'lucide-react'
 import { useCallback, useState } from 'react'
 import { useForm } from 'react-hook-form'
+import { Link } from 'react-router-dom'
 import { z } from 'zod'
 
 import { useCreateTeam, useDeleteTeam, useTeams } from '@/api/competitions'
@@ -118,17 +119,56 @@ export function ClubsPanel({
       key: 'name',
       header: 'Club',
       render: (team) => (
-        <div>
+        <Link
+          to={`/organizations/${organizationId}/clubs/${team.id}`}
+          className="block hover:text-primary"
+        >
           <p className="font-medium">{team.name}</p>
           <p className="text-[13px] text-foreground-subtle">/{team.slug}</p>
-        </div>
+        </Link>
       ),
     },
     {
       key: 'short',
-      header: 'Short name',
+      header: 'Short',
       secondary: true,
       render: (team) => <span className="text-foreground-muted">{team.short_name}</span>,
+    },
+    {
+      key: 'squad',
+      header: 'Squad',
+      align: 'right',
+      render: (team) =>
+        team.squad_size === 0 ? (
+          <span className="tabular-nums text-foreground-subtle">—</span>
+        ) : (
+          <span className="font-semibold tabular-nums">{team.squad_size}</span>
+        ),
+    },
+    {
+      key: 'seasons',
+      header: 'Seasons',
+      align: 'right',
+      secondary: true,
+      render: (team) => (
+        <span className="tabular-nums text-foreground-muted">{team.seasons_played}</span>
+      ),
+    },
+    {
+      key: 'latest',
+      header: 'Latest season',
+      secondary: true,
+      render: (team) =>
+        team.latest_season ? (
+          <Link
+            to={`/organizations/${organizationId}/leagues/${team.latest_season.league_id}/seasons/${team.latest_season.id}/overview`}
+            className="text-foreground-muted hover:text-primary"
+          >
+            {team.latest_season.name}
+          </Link>
+        ) : (
+          <span className="text-foreground-subtle">Not entered</span>
+        ),
     },
   ]
 
@@ -136,7 +176,7 @@ export function ClubsPanel({
     <>
       <CollectionShell
         title="Clubs"
-        description="Every club registered with this organization."
+        description="Every club registered with this organization. The squad is the one it has entered for its most recent season."
         searchPlaceholder="Search clubs"
         search={search}
         onSearchChange={setSearch}

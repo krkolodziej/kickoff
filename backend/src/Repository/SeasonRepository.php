@@ -6,6 +6,7 @@ namespace App\Repository;
 
 use App\Dto\Input\ListQuery;
 use App\Entity\League;
+use App\Entity\Organization;
 use App\Entity\OrganizationRole;
 use App\Entity\Season;
 use App\Entity\User;
@@ -77,5 +78,63 @@ class SeasonRepository extends ServiceEntityRepository
         }
 
         return ((int) $qb->getQuery()->getSingleScalarResult()) > 0;
+    }
+
+    /**
+     * The season a visitor should be dropped into: the most recent one this organization runs.
+     *
+     * `addSelect('l')` because the caller needs the league's id to build a path, and a lazy
+     * proxy there would be a second query for one integer.
+     */
+    public function latestForOrganization(Organization $organization): ?Season
+    {
+        /* @var Season|null */
+        return $this->createQueryBuilder('s')
+            ->addSelect('l')
+            ->innerJoin('s.league', 'l')
+            ->where('l.organization = :organization')
+            ->orderBy('s.startDate', 'DESC')
+            ->addOrderBy('s.id', 'DESC')
+            ->setMaxResults(1)
+            ->setParameter('organization', $organization)
+            ->getQuery()
+            ->getOneOrNullResult();
+    }
+
+    /**
+     * The seasons belonging to a page of leagues, newest first, grouped by league.
+     *
+     * One query answers two questions — how many seasons a league has (the row count) and
+     * which one is current (the first row) — because they arrive together anyway. Asking
+     * separately would be two round trips for one fold.
+     *
+     * @param list<int> $leagueIds
+     *
+     * @return array<int, list<Season>> league id => seasons, newest first
+     */
+    public function forLeagues(array $leagueIds): array
+    {
+        if ([] === $leagueIds) {
+            return [];
+        }
+
+        /** @var list<Season> $rows */
+        $rows = $this->createQueryBuilder('s')
+            ->where('IDENTITY(s.league) IN (:leagues)')
+            ->orderBy('s.startDate', 'DESC')
+            ->addOrderBy('s.id', 'DESC')
+            ->setParameter('leagues', $leagueIds)
+            ->getQuery()
+            ->getResult();
+
+        $grouped = [];
+
+        foreach ($rows as $season) {
+            // Reading the id off an unloaded league proxy costs nothing: Doctrine keeps the
+            // identifier on the proxy, so this does not wake one league per season.
+            $grouped[(int) $season->getLeague()->getId()][] = $season;
+        }
+
+        return $grouped;
     }
 }

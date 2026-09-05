@@ -8,6 +8,7 @@ use App\Entity\OrganizationRole;
 use App\Tests\Factory\LeagueFactory;
 use App\Tests\Factory\OrganizationFactory;
 use App\Tests\Factory\OrganizationMembershipFactory;
+use App\Tests\Factory\SeasonFactory;
 use App\Tests\Factory\UserFactory;
 use Symfony\Component\HttpFoundation\Response;
 
@@ -131,5 +132,58 @@ final class LeagueApiTest extends ApiTestCase
 
         $this->request('DELETE', $uri, null, $token);
         self::assertResponseStatusCodeSame(Response::HTTP_NO_CONTENT);
+    }
+
+    /**
+     * What makes a league row worth opening: how many seasons are inside it and which one is
+     * current, so the row can link at the season rather than at another list.
+     */
+    public function testALeagueRowCarriesItsSeasons(): void
+    {
+        $owner = UserFactory::createOne();
+        $organization = OrganizationFactory::createOne(['createdBy' => $owner]);
+        $league = LeagueFactory::createOne(['organization' => $organization]);
+
+        SeasonFactory::createOne([
+            'league' => $league,
+            'name' => '2025',
+            'startDate' => new \DateTimeImmutable('2025-03-01'),
+        ]);
+        $latest = SeasonFactory::createOne([
+            'league' => $league,
+            'name' => '2026',
+            'startDate' => new \DateTimeImmutable('2026-03-01'),
+        ]);
+
+        $this->request(
+            'GET',
+            '/api/v1/organizations/'.$organization->getId().'/leagues',
+            null,
+            $this->signIn($owner),
+        );
+
+        self::assertResponseIsSuccessful();
+
+        $row = $this->jsonList()[0];
+        self::assertSame(2, $row['season_count']);
+        self::assertSame('2026', $row['latest_season']['name']);
+        self::assertSame($latest->getId(), $row['latest_season']['id']);
+    }
+
+    public function testALeagueWithNoSeasonsSaysSo(): void
+    {
+        $owner = UserFactory::createOne();
+        $organization = OrganizationFactory::createOne(['createdBy' => $owner]);
+        LeagueFactory::createOne(['organization' => $organization]);
+
+        $this->request(
+            'GET',
+            '/api/v1/organizations/'.$organization->getId().'/leagues',
+            null,
+            $this->signIn($owner),
+        );
+
+        self::assertSame(0, $this->jsonList()[0]['season_count']);
+        self::assertNull($this->jsonList()[0]['latest_season']);
     }
 }

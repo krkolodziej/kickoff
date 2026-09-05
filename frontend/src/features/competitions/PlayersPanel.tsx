@@ -2,6 +2,7 @@ import { zodResolver } from '@hookform/resolvers/zod'
 import { Plus, Trash2 } from 'lucide-react'
 import { useCallback, useState } from 'react'
 import { useForm } from 'react-hook-form'
+import { Link } from 'react-router-dom'
 import { z } from 'zod'
 
 import { useCreatePlayer, useDeletePlayer, usePlayers } from '@/api/competitions'
@@ -9,6 +10,7 @@ import type { Player } from '@/api/types'
 import { CollectionShell } from '@/components/data/CollectionShell'
 import { DataTable, type Column } from '@/components/data/DataTable'
 import { Pagination } from '@/components/data/Pagination'
+import { CaptainBadge, PositionBadge } from '@/components/domain/PositionBadge'
 import { Button } from '@/components/ui/button'
 import { Dialog } from '@/components/ui/dialog'
 import { Field } from '@/components/ui/field'
@@ -128,15 +130,69 @@ export function PlayersPanel({
     {
       key: 'name',
       header: 'Player',
-      render: (player) => <span className="font-medium">{player.full_name}</span>,
+      render: (player) => (
+        <Link
+          to={`/organizations/${organizationId}/players/${player.id}`}
+          className="inline-flex items-center gap-2 font-medium hover:text-primary"
+        >
+          {player.full_name}
+          {player.current_squad?.captain ? <CaptainBadge /> : null}
+        </Link>
+      ),
     },
     {
-      key: 'dob',
-      header: 'Date of birth',
+      key: 'position',
+      header: 'Pos',
+      render: (player) => <PositionBadge position={player.current_squad?.position ?? null} />,
+    },
+    {
+      key: 'club',
+      header: 'Club',
+      secondary: true,
+      render: (player) =>
+        player.current_squad ? (
+          <Link
+            to={`/organizations/${organizationId}/clubs/${player.current_squad.team_id}`}
+            className="text-foreground-muted hover:text-primary"
+          >
+            {player.current_squad.team_name}
+          </Link>
+        ) : (
+          <span className="text-foreground-subtle">Unattached</span>
+        ),
+    },
+    {
+      key: 'shirt',
+      header: '#',
+      align: 'right',
       secondary: true,
       render: (player) => (
-        <span className="tabular text-foreground-muted">{player.date_of_birth ?? '—'}</span>
+        <span className="tabular-nums text-foreground-muted">
+          {player.current_squad?.shirt_number ?? '—'}
+        </span>
       ),
+    },
+    {
+      // Age rather than the date it is derived from: a date of birth is data, an age is what
+      // a reader scanning a squad list actually wants. The date is on the player's own page.
+      key: 'age',
+      header: 'Age',
+      align: 'right',
+      secondary: true,
+      render: (player) => (
+        <span className="tabular-nums text-foreground-muted">{player.age ?? '—'}</span>
+      ),
+    },
+    {
+      key: 'goals',
+      header: 'Goals',
+      align: 'right',
+      render: (player) =>
+        player.goals === 0 ? (
+          <span className="tabular-nums text-foreground-subtle">—</span>
+        ) : (
+          <span className="font-semibold tabular-nums">{player.goals}</span>
+        ),
     },
   ]
 
@@ -144,7 +200,7 @@ export function PlayersPanel({
     <>
       <CollectionShell
         title="Players"
-        description="Registered once, then picked for a squad season by season."
+        description="Registered once, then picked for a squad season by season. Club, number and position come from the current season."
         searchPlaceholder="Search players"
         search={search}
         onSearchChange={setSearch}

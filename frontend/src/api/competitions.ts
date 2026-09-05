@@ -9,9 +9,11 @@ import {
   type ListParams,
   type Player,
   type PlayerPayload,
+  type PlayerProfile,
   type ResultPage,
   type Team,
   type TeamPayload,
+  type TeamProfile,
 } from './types'
 
 /**
@@ -78,6 +80,28 @@ export function usePlayers(organizationId: number, params?: ListParams) {
     `/organizations/${organizationId}/players`,
     params,
   )
+}
+
+/**
+ * A club's page in one request: the club, its current squad and every season it has played.
+ *
+ * One query rather than three chained ones — the squad's address is not knowable until the
+ * seasons have come back, so assembling this on the client is a waterfall by construction.
+ */
+export function useTeamProfile(organizationId: number, teamId: number) {
+  return useQuery({
+    queryKey: qk.teamProfile(organizationId, teamId),
+    queryFn: () => apiFetch<TeamProfile>(`/organizations/${organizationId}/teams/${teamId}/profile`),
+  })
+}
+
+/** The same shape for a person: who they are, and what they did season by season. */
+export function usePlayerProfile(organizationId: number, playerId: number) {
+  return useQuery({
+    queryKey: qk.playerProfile(organizationId, playerId),
+    queryFn: () =>
+      apiFetch<PlayerProfile>(`/organizations/${organizationId}/players/${playerId}/profile`),
+  })
 }
 
 function useCreate<TPayload, TResult>(organizationId: number, resource: string) {

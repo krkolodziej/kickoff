@@ -6,10 +6,13 @@ namespace App\Controller\Api;
 
 use App\Command\SeedDemoCommand;
 use App\Entity\User;
+use App\Repository\OrganizationRepository;
+use App\Repository\SeasonRepository;
 use App\Repository\UserRepository;
 use Lexik\Bundle\JWTAuthenticationBundle\Security\Http\Authentication\AuthenticationSuccessHandler;
 use Symfony\Bundle\FrameworkBundle\Controller\AbstractController;
 use Symfony\Component\DependencyInjection\Attribute\Autowire;
+use Symfony\Component\HttpFoundation\JsonResponse;
 use Symfony\Component\HttpFoundation\Response;
 use Symfony\Component\Routing\Attribute\Route;
 
@@ -30,8 +33,9 @@ use Symfony\Component\Routing\Attribute\Route;
  * deleting the organization is not, because that needs OWNER. A visitor cannot destroy the
  * thing they came to look at, and no amount of clicking around leaves the demo broken.
  *
- * The response is the same one the login endpoint produces — the same handler builds it — so
- * the client has nothing special to do afterwards.
+ * The response is the same one the login endpoint produces — the same handler builds it — with
+ * one key added: where to go. A visitor who lands on a list of organizations has to find the
+ * season for themselves, and the season is the entire reason they clicked.
  */
 #[Route('/api/v1/auth/demo')]
 final class DemoController extends AbstractController
@@ -40,6 +44,8 @@ final class DemoController extends AbstractController
         #[Autowire(service: 'lexik_jwt_authentication.handler.authentication_success')]
         private readonly AuthenticationSuccessHandler $authenticationSuccess,
         private readonly UserRepository $users,
+        private readonly OrganizationRepository $organizations,
+        private readonly SeasonRepository $seasons,
         #[Autowire('%env(bool:DEMO_LOGIN_ENABLED)%')]
         private readonly bool $enabled,
     ) {
@@ -66,6 +72,63 @@ final class DemoController extends AbstractController
             ], Response::HTTP_SERVICE_UNAVAILABLE);
         }
 
-        return $this->authenticationSuccess->handleAuthenticationSuccess($visitor);
+        $response = $this->authenticationSuccess->handleAuthenticationSuccess($visitor);
+
+        // The handler's declared return type is Response; at runtime it is a JsonResponse, and
+        // `setData()` re-encodes the body while leaving the headers and the refresh cookie
+        // that the authentication-success subscribers attached. If that ever stops being true
+        // the endpoint quietly goes back to answering exactly what it answered before, which
+        // is a worse demo but not a broken sign-in.
+        if ($response instanceof JsonResponse) {
+            /** @var array<string, mixed> $body */
+            $body = json_decode((string) $response->getContent(), true, flags: \JSON_THROW_ON_ERROR);
+            $body['demo'] = $this->entryPoint($visitor);
+
+            $response->setData($body);
+        }
+
+        return $response;
+    }
+
+    /**
+     * Where the visitor should be dropped: the most recent season this account can see.
+     *
+     * Resolved from the visitor's own membership rather than from the seeder's slug, which
+     * matters for two reasons. It cannot reach an organization the account is not a member of,
+     * and it can be exercised by a test that builds two rows instead of by one that plays
+     * seventy matches.
+     *
+     * Ids, not a path. Every address in this application is built by the client; the one place
+     * the server writes a path is a stored notification, which documents itself as the
+     * exception because it has to survive a change of host. This is computed per request.
+     *
+     * Null when there is nothing to enter — an unseeded organization, or a season somebody has
+     * since deleted. The client falls back to the organization list rather than to a 404.
+     *
+     * @return array{organization_id: int, league_id: int, season_id: int}|null
+     */
+    private function entryPoint(User $visitor): ?array
+    {
+        $memberships = $this->organizations->findForUser($visitor);
+        $organization = $memberships[0]['organization'] ?? null;
+
+        if (null === $organization) {
+            return null;
+        }
+
+        $season = $this->seasons->latestForOrganization($organization);
+
+        if (null === $season) {
+            return null;
+        }
+
+        // snake_case by hand. `setData()` calls json_encode directly and does not run the
+        // camel-case name converter that every serialized resource in this API relies on, so
+        // a `seasonId` written here would reach the client as `seasonId`.
+        return [
+            'organization_id' => (int) $organization->getId(),
+            'league_id' => (int) $season->getLeague()->getId(),
+            'season_id' => (int) $season->getId(),
+        ];
     }
 }

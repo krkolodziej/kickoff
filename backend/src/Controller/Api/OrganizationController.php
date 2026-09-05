@@ -41,11 +41,19 @@ final class OrganizationController extends AbstractController
     ): JsonResponse {
         $rows = $repository->findForUser($user, $request->query->getString('search'));
 
+        // Batched, not joined onto the query above: three collection joins beside the
+        // membership one would multiply into a cartesian product. See countsFor().
+        $counts = $repository->countsFor(array_map(
+            static fn (array $row): int => (int) $row['organization']->getId(),
+            $rows,
+        ));
+
         return $this->json(array_map(
             static fn (array $row): OrganizationResource => OrganizationResource::fromEntity(
                 $row['organization'],
                 $row['role'],
                 $row['memberCount'],
+                $counts[(int) $row['organization']->getId()] ?? null,
             ),
             $rows,
         ));
@@ -66,13 +74,9 @@ final class OrganizationController extends AbstractController
 
     #[Route('/{organizationId<\d+>}', name: 'api_organizations_show', methods: ['GET'])]
     #[IsGranted(OrganizationVoter::VIEW, subject: 'scope')]
-    public function show(OrganizationScope $scope): JsonResponse
+    public function show(OrganizationScope $scope, OrganizationRepository $repository): JsonResponse
     {
-        return $this->json(OrganizationResource::fromEntity(
-            $scope->organization(),
-            $scope->role(),
-            $scope->organization()->getMemberships()->count(),
-        ));
+        return $this->json($this->resource($scope, $repository));
     }
 
     #[Route('/{organizationId<\d+>}', name: 'api_organizations_update', methods: ['PATCH'])]
@@ -80,14 +84,31 @@ final class OrganizationController extends AbstractController
     public function update(
         OrganizationScope $scope,
         #[MapRequestPayload] OrganizationRequest $payload,
+        OrganizationRepository $repository,
     ): JsonResponse {
         $this->organizations->rename($scope->organization(), $payload->name, $payload->slug);
 
-        return $this->json(OrganizationResource::fromEntity(
-            $scope->organization(),
+        return $this->json($this->resource($scope, $repository));
+    }
+
+    /**
+     * One organization, with the same counts the list carries.
+     *
+     * `getMemberships()->count()` on an uninitialised collection loads every membership row
+     * in order to count it, so the member count comes from the same grouped query as the
+     * rest — which is both cheaper and one fewer place for the two endpoints to disagree.
+     */
+    private function resource(OrganizationScope $scope, OrganizationRepository $repository): OrganizationResource
+    {
+        $organization = $scope->organization();
+        $id = (int) $organization->getId();
+
+        return OrganizationResource::fromEntity(
+            $organization,
             $scope->role(),
-            $scope->organization()->getMemberships()->count(),
-        ));
+            $repository->memberCountFor($id),
+            $repository->countsFor([$id])[$id] ?? null,
+        );
     }
 
     /**

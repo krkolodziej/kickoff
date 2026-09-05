@@ -1,7 +1,7 @@
 import { zodResolver } from '@hookform/resolvers/zod'
 import { useState } from 'react'
 import { useForm } from 'react-hook-form'
-import { Link, useNavigate } from 'react-router-dom'
+import { Link } from 'react-router-dom'
 import { z } from 'zod'
 
 import { useRegister } from '@/api/auth'
@@ -32,7 +32,6 @@ type Values = z.infer<typeof schema>
 
 export function SignUpPage() {
   const registerAccount = useRegister()
-  const navigate = useNavigate()
   const [formError, setFormError] = useState<string | null>(null)
 
   const {
@@ -56,7 +55,6 @@ export function SignUpPage() {
 
     try {
       await registerAccount.mutateAsync(values)
-      navigate('/dashboard', { replace: true })
     } catch (error) {
       setFormError(
         applyApiErrorToForm(error, setError, [

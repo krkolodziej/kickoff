@@ -42,6 +42,10 @@ function OrganizationMark({ name }: { name: string }) {
   )
 }
 
+function plural(count: number, noun: string): string {
+  return `${count} ${noun}${count === 1 ? '' : 's'}`
+}
+
 function OrganizationCard({ organization }: { organization: Organization }) {
   return (
     <Link
@@ -52,7 +56,14 @@ function OrganizationCard({ organization }: { organization: Organization }) {
 
       <div className="min-w-0 flex-1">
         <p className="truncate text-[15px] font-semibold">{organization.name}</p>
-        <p className="mt-0.5 truncate text-[13px] text-foreground-subtle">/{organization.slug}</p>
+        {/*
+          * What is inside, on one muted line rather than as three more badges. The right-hand
+          * side already carries two, and a card with five is a card nobody reads.
+          */}
+        <p className="mt-0.5 truncate text-[13px] text-foreground-subtle">
+          {plural(organization.league_count, 'league')} · {plural(organization.team_count, 'club')}{' '}
+          · {plural(organization.player_count, 'player')}
+        </p>
       </div>
 
       <div className="flex shrink-0 items-center gap-3">

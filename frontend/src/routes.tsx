@@ -5,8 +5,10 @@ import { RequireAnonymous, RequireAuth } from '@/components/RouteGuards'
 import { AuthLayout } from '@/features/auth/AuthLayout'
 import { SignInPage } from '@/features/auth/SignInPage'
 import { SignUpPage } from '@/features/auth/SignUpPage'
+import { ClubPage } from '@/features/competitions/ClubPage'
 import { LeaguePage } from '@/features/competitions/LeaguePage'
 import { MatchPage } from '@/features/competitions/MatchPage'
+import { PlayerPage } from '@/features/competitions/PlayerPage'
 import {
   FixturesSection,
   OverviewSection,
@@ -67,6 +69,11 @@ export const router = createBrowserRouter([
             path: '/organizations/:organizationId/leagues/:leagueId/seasons/:seasonId/fixtures/:fixtureId',
             element: <MatchPage />,
           },
+          // Outside the organization's tab shell too, and for the same reason a league is:
+          // a club and a person each have an identity that outlives any one season, so each
+          // gets an address rather than a tab left highlighted behind them.
+          { path: '/organizations/:organizationId/clubs/:teamId', element: <ClubPage /> },
+          { path: '/organizations/:organizationId/players/:playerId', element: <PlayerPage /> },
           {
             path: '/organizations/:organizationId',
             element: <OrganizationPage />,

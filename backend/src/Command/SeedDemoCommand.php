@@ -40,9 +40,9 @@ use Symfony\Component\String\Slugger\SluggerInterface;
  *
  * Two properties are worth more than the data itself.
  *
- * **It is deterministic.** The randomness comes from a seeded `Mt19937`, so the same command
- * produces the same league every time, on every machine. A demo whose table changes on each
- * run cannot be used to check the table: there is nothing to compare against.
+ * **It is deterministic.** The randomness comes from seeded `Mt19937` engines, so the same
+ * command produces the same league every time, on every machine. A demo whose table changes
+ * on each run cannot be used to check the table: there is nothing to compare against.
  *
  * **It plays through the real services.** Results are not written into the score columns.
  * Every match is started, its goals recorded one at a time and then finished, through the
@@ -76,27 +76,94 @@ final class SeedDemoCommand extends Command
     private const ORGANIZATION_SLUG = 'demo';
     private const SEASON = '2026';
 
+    private const LEAGUE = 'District League';
+    private const LEAGUE_SLUG = 'district-league';
+    private const LEAGUE_DESCRIPTION = 'Fourth tier of the Podkarpacie district. Twelve clubs, home and away, March to November.';
+
     /** Rounds played out of the twenty-two a twelve-club double round robin produces. */
     private const ROUNDS_PLAYED = 13;
 
+    /**
+     * Club name => the short name a league table has room to print.
+     *
+     * Written out rather than derived. Three letters chopped off the front and shouted —
+     * STA, RES, KAR — is what an algorithm produces; "Stal", "Resovia", "Karpaty" is what a
+     * person would write, and every fixture row and table line in the demo shows one.
+     */
     private const CLUBS = [
-        'Stal Rzeszów', 'Resovia', 'Karpaty Krosno', 'Siarka Tarnobrzeg',
-        'Sokół Sieniawa', 'Wisłok Wiśniowa', 'Polonia Przemyśl', 'Czarni Jasło',
-        'Igloopol Dębica', 'San Sanok', 'Orzeł Przeworsk', 'Piast Tuczempy',
+        'Stal Rzeszów' => 'Stal',
+        'Resovia' => 'Resovia',
+        'Karpaty Krosno' => 'Karpaty',
+        'Siarka Tarnobrzeg' => 'Siarka',
+        'Sokół Sieniawa' => 'Sokół',
+        'Wisłok Wiśniowa' => 'Wisłok',
+        'Polonia Przemyśl' => 'Polonia',
+        'Czarni Jasło' => 'Czarni',
+        'Igloopol Dębica' => 'Igloopol',
+        'San Sanok' => 'San',
+        'Orzeł Przeworsk' => 'Orzeł',
+        'Piast Tuczempy' => 'Piast',
     ];
 
     private const FIRST_NAMES = [
         'Jan', 'Piotr', 'Marcin', 'Tomasz', 'Łukasz', 'Kamil', 'Bartosz', 'Michał',
         'Adrian', 'Rafał', 'Dawid', 'Sebastian', 'Grzegorz', 'Mateusz', 'Paweł', 'Krzysztof',
+        'Jakub', 'Filip', 'Wojciech', 'Maciej', 'Karol', 'Damian', 'Norbert', 'Przemysław',
     ];
 
     private const LAST_NAMES = [
         'Nowak', 'Kowalski', 'Wiśniewski', 'Wójcik', 'Kowalczyk', 'Kamiński', 'Lewandowski',
         'Zieliński', 'Szymański', 'Woźniak', 'Dąbrowski', 'Kozłowski', 'Jankowski', 'Mazur',
         'Kwiatkowski', 'Krawczyk', 'Piotrowski', 'Grabowski', 'Nowakowski', 'Pawłowski',
+        'Michalski', 'Adamczyk', 'Dudek', 'Zając', 'Wieczorek', 'Jabłoński', 'Król',
+        'Majewski', 'Olszewski', 'Jaworski', 'Wróbel', 'Malinowski', 'Pawlak', 'Witkowski',
+        'Walczak', 'Stępień', 'Górski', 'Rutkowski', 'Michalak', 'Sikora',
     ];
 
+    /**
+     * Plausible age ranges, by position, for the season being seeded.
+     *
+     * Goalkeepers last longest and forwards start youngest — not a rule of the game, but it
+     * is what a squad list looks like, and a column of ages that are all 24 reads as filler.
+     *
+     * @var array<string, array{int, int}>
+     */
+    private const AGE_BANDS = [
+        PlayerPosition::Goalkeeper->value => [24, 38],
+        PlayerPosition::Defender->value => [19, 35],
+        PlayerPosition::Midfielder->value => [18, 34],
+        PlayerPosition::Forward->value => [17, 32],
+    ];
+
+    /** The match engine: squad sizes, results, minutes, scorers. */
     private Randomizer $random;
+
+    /**
+     * Biography: names, dates of birth, who wears the armband.
+     *
+     * A second engine rather than more draws from the first, because `Mt19937` is a sequence
+     * and inserting a draw shifts every draw after it. Drawing a date of birth from the match
+     * engine would change every score in the demo, which is a strange thing for a birthday to
+     * do — and a confusing diff to read six months later.
+     *
+     * This split does not make the *current* results stable retroactively: the names used to
+     * be drawn from the match engine, so moving them here moved the scores once, on this
+     * commit. Nothing depends on the old figures — the README's claim is that a given seed
+     * produces the same league everywhere, not that it produces any particular league, and
+     * that still holds. What the split buys is that the next change to a name list, an age
+     * band or a card rate cannot move them again.
+     */
+    private Randomizer $people;
+
+    /** Cards and substitutions, drawn after the score is settled, for the same reason. */
+    private Randomizer $flavour;
+
+    /**
+     * Every first-name/surname pair, shuffled, drawn from without replacement.
+     *
+     * @var list<array{string, string}>
+     */
+    private array $nameSupply = [];
 
     public function __construct(
         private readonly EntityManagerInterface $entityManager,
@@ -113,6 +180,8 @@ final class SeedDemoCommand extends Command
         parent::__construct();
 
         $this->random = new Randomizer(new Mt19937(self::SEED));
+        $this->people = new Randomizer(new Mt19937(self::SEED + 1));
+        $this->flavour = new Randomizer(new Mt19937(self::SEED + 2));
     }
 
     protected function configure(): void
@@ -243,7 +312,9 @@ final class SeedDemoCommand extends Command
 
     private function season(Organization $organization): Season
     {
-        $league = new League($organization, 'District League', 'district-league');
+        $league = new League($organization, self::LEAGUE, self::LEAGUE_SLUG);
+        $league->setDescription(self::LEAGUE_DESCRIPTION);
+
         $season = new Season($league, self::SEASON, new \DateTimeImmutable('2026-03-01'));
         $season->setEndDate(new \DateTimeImmutable('2026-11-30'));
 
@@ -262,9 +333,9 @@ final class SeedDemoCommand extends Command
         $squads = [];
         $io->progressStart(\count(self::CLUBS));
 
-        foreach (self::CLUBS as $name) {
+        foreach (self::CLUBS as $name => $shortName) {
             $team = new Team($organization, $name, $this->slugger->slug($name)->lower()->toString());
-            $team->setShortName($this->shortName($name));
+            $team->setShortName($shortName);
             $this->entityManager->persist($team);
             $this->entityManager->flush();
 
@@ -295,14 +366,19 @@ final class SeedDemoCommand extends Command
     private function squad(Organization $organization, SeasonTeam $seasonTeam): array
     {
         $size = $this->random->getInt(16, 18);
+        $seasonStart = $seasonTeam->getSeason()->getStartDate();
         $players = [];
 
+        // Twelve goalkeeper-captains across twelve clubs is a tell that the data was
+        // generated. The armband goes to an outfielder with a senior number instead.
+        $captainShirt = $this->people->getInt(2, min(11, $size));
+
         for ($shirt = 1; $shirt <= $size; ++$shirt) {
-            $player = new Player(
-                $organization,
-                self::FIRST_NAMES[$this->random->getInt(0, \count(self::FIRST_NAMES) - 1)],
-                self::LAST_NAMES[$this->random->getInt(0, \count(self::LAST_NAMES) - 1)],
-            );
+            $position = $this->position($shirt);
+            [$firstName, $lastName] = $this->nextName();
+
+            $player = new Player($organization, $firstName, $lastName);
+            $player->setDateOfBirth($this->birthDate($position, $seasonStart));
 
             $this->entityManager->persist($player);
             $this->entityManager->flush();
@@ -311,8 +387,8 @@ final class SeedDemoCommand extends Command
                 $seasonTeam,
                 $player,
                 $shirt,
-                $this->position($shirt),
-                captain: 1 === $shirt,
+                $position,
+                captain: $shirt === $captainShirt,
             );
 
             $players[] = $player;
@@ -332,7 +408,66 @@ final class SeedDemoCommand extends Command
     }
 
     /**
-     * @param list<Fixture>          $calendar
+     * A date of birth that makes the player the right age *for this season*.
+     *
+     * Anchored on the season's start rather than on today, which is what keeps it
+     * deterministic: anchoring on `now()` would produce a different database every day, and
+     * eventually players born after the season they played in.
+     *
+     * The age a client displays is still computed against the real today and so grows over
+     * time. That is correct — people do get older — and it is why the date is what gets
+     * stored rather than the age.
+     */
+    private function birthDate(PlayerPosition $position, \DateTimeImmutable $seasonStart): \DateTimeImmutable
+    {
+        [$youngest, $oldest] = self::AGE_BANDS[$position->value];
+
+        $years = $this->people->getInt($youngest, $oldest);
+        $days = $this->people->getInt(0, 364);
+
+        return $seasonStart->modify(\sprintf('-%d years -%d days', $years, $days));
+    }
+
+    /**
+     * A name nobody else in this demo has.
+     *
+     * Twenty-four first names against forty surnames is 960 pairs for about two hundred
+     * players, and drawing them at random would still collide constantly — the birthday
+     * paradox does not care how big the pool is. Three players called Jan Kowalski in a
+     * demonstration database reads as a bug in the seeder, which is exactly what it is.
+     *
+     * Shuffled once and popped from, so the supply runs out loudly rather than quietly
+     * repeating itself the day somebody asks for five hundred players.
+     *
+     * @return array{string, string}
+     */
+    private function nextName(): array
+    {
+        if ([] === $this->nameSupply) {
+            $pairs = [];
+
+            foreach (self::FIRST_NAMES as $firstName) {
+                foreach (self::LAST_NAMES as $lastName) {
+                    $pairs[] = [$firstName, $lastName];
+                }
+            }
+
+            /** @var list<array{string, string}> $shuffled */
+            $shuffled = $this->people->shuffleArray($pairs);
+            $this->nameSupply = $shuffled;
+        }
+
+        $name = array_pop($this->nameSupply);
+
+        if (null === $name) {
+            throw new \LogicException('The demo has run out of distinct names. Widen FIRST_NAMES or LAST_NAMES.');
+        }
+
+        return $name;
+    }
+
+    /**
+     * @param list<Fixture>            $calendar
      * @param array<int, list<Player>> $squads
      */
     private function playSeason(SymfonyStyle $io, array $calendar, array $squads): void
@@ -389,7 +524,7 @@ final class SeedDemoCommand extends Command
                 $this->events->record(
                     $fixture,
                     MatchEventType::Goal,
-                    $this->uniqueMinute($minutes),
+                    $this->uniqueMinute($minutes, $this->random),
                     $team,
                     $this->scorer($squads[(int) $team->getId()]),
                 );
@@ -397,16 +532,21 @@ final class SeedDemoCommand extends Command
         }
 
         foreach ([$home, $away] as $team) {
-            if ($this->fraction() < 0.35) {
+            if ($this->fraction($this->random) < 0.35) {
                 $this->events->record(
                     $fixture,
                     MatchEventType::YellowCard,
-                    $this->uniqueMinute($minutes),
+                    $this->uniqueMinute($minutes, $this->random),
                     $team,
                     $squads[(int) $team->getId()][$this->random->getInt(0, \count($squads[(int) $team->getId()]) - 1)],
                 );
             }
         }
+
+        // Everything the score depends on has now been recorded. What follows draws from a
+        // different engine and is appended afterwards, so no draw above can be shifted by it
+        // — including the retries inside uniqueMinute(), which is the subtle half of that.
+        $this->addColour($fixture, $squads);
 
         if (!$leaveRunning) {
             $this->lifecycle->finish($fixture);
@@ -414,17 +554,63 @@ final class SeedDemoCommand extends Command
     }
 
     /**
-     * `Randomizer::getFloat()` arrived in PHP 8.3 and this project targets 8.2, so the
-     * fraction is built from an integer draw. Same generator, same determinism.
+     * The events that do not change the score but do make a match look like one.
+     *
+     * Without these the statistics page has a permanently empty "Red" column and the match
+     * timeline has never once shown a substitution — two features that work, demonstrated by
+     * data that never exercises them.
+     *
+     * @param array<int, list<Player>> $squads
      */
-    private function fraction(): float
+    private function addColour(Fixture $fixture, array $squads): void
     {
-        return $this->random->getInt(0, 9999) / 10000;
+        $minutes = [];
+
+        foreach ([$fixture->getHomeTeam(), $fixture->getAwayTeam()] as $team) {
+            $squad = $squads[(int) $team->getId()];
+
+            if ($this->fraction($this->flavour) < 0.06) {
+                $this->events->record(
+                    $fixture,
+                    MatchEventType::RedCard,
+                    $this->uniqueMinute($minutes, $this->flavour),
+                    $team,
+                    $squad[$this->flavour->getInt(0, \count($squad) - 1)],
+                );
+            }
+
+            // Two or three changes, the ones coming on drawn from the back of the squad —
+            // the list is ordered by shirt number, so that is the bench.
+            $bench = array_slice($squad, 11);
+
+            for ($i = 0; $i < $this->flavour->getInt(2, 3) && [] !== $bench; ++$i) {
+                $comingOn = array_splice($bench, $this->flavour->getInt(0, \count($bench) - 1), 1)[0];
+                $goingOff = $squad[$this->flavour->getInt(0, min(10, \count($squad) - 1))];
+
+                $this->events->record(
+                    $fixture,
+                    MatchEventType::Substitution,
+                    $this->uniqueMinute($minutes, $this->flavour, from: 55),
+                    $team,
+                    $goingOff,
+                    $comingOn,
+                );
+            }
+        }
+    }
+
+    /**
+     * `Randomizer::getFloat()` arrived in PHP 8.3 and this project targets 8.2, so the
+     * fraction is built from an integer draw. Same determinism, whichever engine is asked.
+     */
+    private function fraction(Randomizer $random): float
+    {
+        return $random->getInt(0, 9999) / 10000;
     }
 
     private function goalCount(float $homeWeight): int
     {
-        $roll = $this->fraction() * $homeWeight * 2;
+        $roll = $this->fraction($this->random) * $homeWeight * 2;
 
         return match (true) {
             $roll < 0.30 => 0,
@@ -451,21 +637,14 @@ final class SeedDemoCommand extends Command
     /**
      * @param list<int> $taken
      */
-    private function uniqueMinute(array &$taken): int
+    private function uniqueMinute(array &$taken, Randomizer $random, int $from = 1): int
     {
         do {
-            $minute = $this->random->getInt(1, 90);
+            $minute = $random->getInt($from, 90);
         } while (\in_array($minute, $taken, true));
 
         $taken[] = $minute;
 
         return $minute;
-    }
-
-    private function shortName(string $name): string
-    {
-        $letters = preg_replace('/[^A-Za-zĄĆĘŁŃÓŚŹŻąćęłńóśźż]/u', '', $name) ?? $name;
-
-        return mb_strtoupper(mb_substr($letters, 0, 3));
     }
 }

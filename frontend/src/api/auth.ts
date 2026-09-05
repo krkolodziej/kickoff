@@ -2,7 +2,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 
 import { apiFetch, setAccessToken } from './client'
 import { qk } from './keys'
-import type { AuthSession, LoginPayload, RegisterPayload, User } from './types'
+import type { AuthSession, DemoSession, LoginPayload, RegisterPayload, User } from './types'
 
 async function login(payload: LoginPayload): Promise<AuthSession> {
   return apiFetch<AuthSession>('/auth/login', { method: 'POST', body: payload })
@@ -16,9 +16,12 @@ async function register(payload: RegisterPayload): Promise<AuthSession> {
  * Signs in the demonstration account, which needs no credential because there is none to
  * give: the server holds the one account this can reach, and it is an administrator rather
  * than the owner, so a visitor can run the league but not delete it.
+ *
+ * The response also says where to go — see DemoSession. A visitor who lands on a list of
+ * organizations has to find the season for themselves, and the season is why they clicked.
  */
-async function signInAsDemo(): Promise<AuthSession> {
-  return apiFetch<AuthSession>('/auth/demo', { method: 'POST' })
+async function signInAsDemo(): Promise<DemoSession> {
+  return apiFetch<DemoSession>('/auth/demo', { method: 'POST' })
 }
 
 async function fetchCurrentUser(): Promise<User> {
@@ -67,6 +70,9 @@ export function useDemoSignIn() {
     mutationFn: signInAsDemo,
     onSuccess: (session) => {
       setAccessToken(session.token)
+      // Recorded before the user, because writing the user is what makes RequireAnonymous
+      // redirect — and it has to have somewhere to send them by then.
+      queryClient.setQueryData(qk.demoEntry, session.demo)
       queryClient.setQueryData(qk.currentUser, session.user)
     },
   })
