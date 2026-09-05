@@ -53,10 +53,21 @@ export MERCURE_PUBLIC_URL="/.well-known/mercure"
 # publishes updates, and it hands out narrow subscriber tokens after deciding, through the
 # ordinary membership rules, who may watch what. There is no `anonymous`, so a subscriber
 # without a token naming the topic receives nothing at all.
-export CADDY_SERVER_EXTRA_DIRECTIVES="mercure {
+#
+# Guarded, because Caddy refuses to start a hub with no subscriber key and that would take the
+# whole site down over a missing optional secret. The clients already fall back to polling when
+# there is no hub, so a deployment without the secret loses realtime and nothing else.
+#
+# Announced rather than skipped in silence: a feature that quietly does nothing is worse than
+# one that is plainly off, and this line is the only place anybody would find out.
+if [ -n "${MERCURE_JWT_SECRET:-}" ]; then
+    export CADDY_SERVER_EXTRA_DIRECTIVES="mercure {
     publisher_jwt {env.MERCURE_JWT_SECRET}
     subscriber_jwt {env.MERCURE_JWT_SECRET}
 }"
+else
+    echo "realtime: MERCURE_JWT_SECRET is not set, so the hub is off and clients will poll"
+fi
 
 # --- background work ---------------------------------------------------------------------
 #

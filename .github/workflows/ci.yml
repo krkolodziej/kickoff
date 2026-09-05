@@ -117,6 +117,7 @@ jobs:
             -e APP_SECRET=ci-only \
             -e 'DATABASE_URL=postgresql://ci:ci@127.0.0.1:5432/ci?serverVersion=17&charset=utf8' \
             -e JWT_PASSPHRASE=ci-only \
+            -e MERCURE_JWT_SECRET=ci-only-hub-secret-at-least-256-bits-long-for-hs256 \
             kickoff:ci
 
           for attempt in $(seq 1 30); do
