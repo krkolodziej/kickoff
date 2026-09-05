@@ -145,6 +145,23 @@ results are recorded, the bell simply never fills, and the messages wait in
 and because a worker holds the container it booted with, so it keeps running code you have
 already changed. `php bin/console messenger:stop-workers` ends it sooner.
 
+### Try it without an account
+
+The sign-in page has a second button that opens a season already thirteen rounds deep: twelve
+clubs, full squads, results, a table and a match still being played.
+
+It signs in as a **second** account, and that is the point. The seeder makes two: an owner,
+which nothing reaches, and a visitor who is an *administrator*. Everything worth demonstrating
+is open to an administrator — creating leagues, registering clubs, running matches — while
+deleting the organization needs OWNER. So a button on the open internet cannot destroy the
+thing it opens.
+
+| | |
+| --- | --- |
+| Switch | `DEMO_LOGIN_ENABLED`, off by default |
+| Data | `SEED_DEMO_ON_START`, seeded in the background so the first boot is not delayed |
+| While it is still seeding | the endpoint answers `503 demo_not_ready` rather than pretending to be absent |
+
 ### Realtime
 
 A live match updates the moment something happens, over server-sent events, and falls back to a

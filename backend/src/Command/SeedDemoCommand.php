@@ -13,6 +13,7 @@ use App\Entity\Fixture;
 use App\Entity\League;
 use App\Entity\MatchEventType;
 use App\Entity\Organization;
+use App\Entity\OrganizationRole;
 use App\Entity\Player;
 use App\Entity\PlayerPosition;
 use App\Entity\Season;
@@ -60,6 +61,16 @@ final class SeedDemoCommand extends Command
      * named constant and not a literal somewhere in the middle of the file.
      */
     private const SEED = 20260904;
+
+    /**
+     * The account the "try the demo" button signs in as.
+     *
+     * Deliberately **not** the owner. Everything interesting is open to an administrator —
+     * creating leagues, registering clubs, running matches — but deleting the organization
+     * needs OWNER, so a visitor cannot destroy the thing they came to look at. That is the
+     * whole reason there are two accounts rather than one.
+     */
+    public const VISITOR_EMAIL = 'visitor@kickoff.test';
 
     private const ORGANIZATION = 'Kickoff Demo';
     private const ORGANIZATION_SLUG = 'demo';
@@ -146,6 +157,7 @@ final class SeedDemoCommand extends Command
 
         $owner = $this->owner($email, $password);
         $organization = $this->organization($owner);
+        $this->visitor($organization);
         $season = $this->season($organization);
 
         $io->section('Clubs and squads');
@@ -169,6 +181,7 @@ final class SeedDemoCommand extends Command
         $io->definitionList(
             ['Sign in as' => $email],
             ['Password' => $password],
+            ['Visitor account' => self::VISITOR_EMAIL.' (administrator, no password)'],
             ['Rounds played' => self::ROUNDS_PLAYED],
         );
 
@@ -199,6 +212,26 @@ final class SeedDemoCommand extends Command
         $this->entityManager->flush();
 
         return $user;
+    }
+
+    /**
+     * The visitor gets a password it will never use — the demo endpoint signs this account in
+     * without one — but it gets a random one rather than a known or empty one, so that the
+     * ordinary login form cannot be used to walk in through the front door.
+     */
+    private function visitor(Organization $organization): void
+    {
+        $existing = $this->users->findOneBy(['email' => User::normaliseEmail(self::VISITOR_EMAIL)]);
+        $visitor = $existing ?? new User(self::VISITOR_EMAIL);
+
+        $visitor->setFirstName('Demo');
+        $visitor->setLastName('Visitor');
+        $visitor->setPassword($this->hasher->hashPassword($visitor, bin2hex(random_bytes(16))));
+
+        $this->entityManager->persist($visitor);
+        $this->entityManager->flush();
+
+        $this->organizationManager->addMember($organization, self::VISITOR_EMAIL, OrganizationRole::Admin);
     }
 
     private function organization(User $owner): Organization

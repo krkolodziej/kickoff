@@ -12,6 +12,15 @@ async function register(payload: RegisterPayload): Promise<AuthSession> {
   return apiFetch<AuthSession>('/auth/register', { method: 'POST', body: payload })
 }
 
+/**
+ * Signs in the demonstration account, which needs no credential because there is none to
+ * give: the server holds the one account this can reach, and it is an administrator rather
+ * than the owner, so a visitor can run the league but not delete it.
+ */
+async function signInAsDemo(): Promise<AuthSession> {
+  return apiFetch<AuthSession>('/auth/demo', { method: 'POST' })
+}
+
 async function fetchCurrentUser(): Promise<User> {
   return apiFetch<User>('/auth/me')
 }
@@ -44,6 +53,18 @@ export function useLogin() {
 
   return useMutation({
     mutationFn: login,
+    onSuccess: (session) => {
+      setAccessToken(session.token)
+      queryClient.setQueryData(qk.currentUser, session.user)
+    },
+  })
+}
+
+export function useDemoSignIn() {
+  const queryClient = useQueryClient()
+
+  return useMutation({
+    mutationFn: signInAsDemo,
     onSuccess: (session) => {
       setAccessToken(session.token)
       queryClient.setQueryData(qk.currentUser, session.user)

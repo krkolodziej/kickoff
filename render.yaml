@@ -74,6 +74,17 @@ services:
       - key: RUN_RELEASE_ON_START
         value: "true"
 
+      # The "look around" button on the sign-in page, and the data behind it. Both belong on a
+      # public demonstration and nowhere else: the endpoint signs somebody in without a
+      # credential, so it is switched on deliberately rather than inherited from a default.
+      #
+      # The account it reaches is an administrator, not the owner, so a visitor can run the
+      # league but cannot delete it — which matters when the button is on the open internet.
+      - key: DEMO_LOGIN_ENABLED
+        value: "1"
+      - key: SEED_DEMO_ON_START
+        value: "true"
+
       # Signs both the updates this application publishes and the narrow tokens it hands to
       # browsers. Generated once and kept: rotating it only drops live connections, which
       # reconnect, but there is no reason to churn it.
