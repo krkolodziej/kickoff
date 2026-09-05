@@ -78,9 +78,6 @@ RUN APP_SECRET=build-only \
     php bin/console cache:warmup --no-interaction \
     && rm -rf var/cache/dev var/log/*
 
-# Extends the image's Caddyfile through its own import directory rather than replacing it.
-COPY docker/mercure.caddyfile /etc/caddy/Caddyfile.d/mercure.caddyfile
-
 COPY docker-entrypoint.sh /usr/local/bin/kickoff-entrypoint
 RUN chmod +x /usr/local/bin/kickoff-entrypoint
 

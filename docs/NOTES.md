@@ -1724,9 +1724,19 @@ FrankenPHP to Caddy z wkompilowanym PHP **i Mercure**. Sprawdzone, nie założon
 więc drugiego kontenera, drugiego procesu ani drugiej rzeczy do wdrożenia. Ta decyzja zapadła
 trzy etapy wcześniej, przy wyborze obrazu, i dopiero teraz się opłaciła.
 
-Konfiguracja huba trafia do `Caddyfile.d/mercure.caddyfile`, a nie do podmienionego
-`Caddyfile`. Domyślny plik kończy się `import Caddyfile.d/*.caddyfile` właśnie po to, żeby
-dodatki nie musiały go forkować i potem rozjeżdżać się z nim przy każdej aktualizacji obrazu.
+Włączenie huba idzie przez `CADDY_SERVER_EXTRA_DIRECTIVES` — placeholder, który obraz zostawia
+**wewnątrz swojego bloku strony**.
+
+Pierwsza wersja wrzucała dyrektywę do `Caddyfile.d/mercure.caddyfile` i to był błąd: ten katalog
+jest importowany na poziomie **globalnym** i oczekuje całych bloków stron, więc samotne
+`mercure` zostało odczytane jako adres strony i Caddy w ogóle nie wstał. Komunikat był zresztą
+wzorowy: *parsed 'mercure' as a site address, but it is a known directive*.
+
+Złapało to CI w półtorej minuty — i to jest cały powód, dla którego obraz jest tam budowany
+**i uruchamiany**, a nie tylko budowany. Przy okazji wyszło, że health check to za mało:
+serwer, który nie wstał, nie odpowiada na nic, więc awaria wyglądała jak awaria aplikacji.
+Doszło osobne sprawdzenie, że hub nasłuchuje — brak huba daje 404, hub bez tokenu daje 401, a
+te dwie odpowiedzi da się rozróżnić.
 
 `MERCURE_URL` liczy się w entrypoincie, bo port nadaje Render dopiero przy starcie. Aplikacja
 publikuje sama do siebie po pętli zwrotnej; `MERCURE_PUBLIC_URL` to **ścieżka**, nie adres —

@@ -42,6 +42,22 @@ fi
 export MERCURE_URL="http://127.0.0.1:${PORT:-8080}/.well-known/mercure"
 export MERCURE_PUBLIC_URL="/.well-known/mercure"
 
+# The hub is switched on through the placeholder the image leaves inside its own site block.
+#
+# Not through Caddyfile.d/: that directory is imported at the *global* level and expects whole
+# site blocks, so a bare `mercure` directive dropped there is read as a site address and Caddy
+# refuses to start. CI caught that in ninety seconds, which is the entire reason the image is
+# built and booted there rather than only on the platform.
+#
+# Publisher and subscriber tokens share a secret because the same application mints both: it
+# publishes updates, and it hands out narrow subscriber tokens after deciding, through the
+# ordinary membership rules, who may watch what. There is no `anonymous`, so a subscriber
+# without a token naming the topic receives nothing at all.
+export CADDY_SERVER_EXTRA_DIRECTIVES="mercure {
+    publisher_jwt {env.MERCURE_JWT_SECRET}
+    subscriber_jwt {env.MERCURE_JWT_SECRET}
+}"
+
 # --- background work ---------------------------------------------------------------------
 #
 # The worker runs beside the web server in the same container, because a separate background
