@@ -1883,6 +1883,46 @@ serwerem nie zdążyłby na health check platformy i deploy zostałby wycofany b
 więc w tle, a endpoint w tym czasie odpowiada `503 demo_not_ready` — i to jest dokładnie ten
 powód, dla którego ta odpowiedź mówi coś konkretnego zamiast udawać 404.
 
+### 8.11 Niewidzialny bajt w sekrecie
+
+Przycisk demo na produkcji zwracał 500. Log podał:
+
+```
+JWTEncodeFailureException -> InvalidKeyProvided:
+  error:1C800064:Provider routines::bad decrypt
+```
+
+`bad decrypt`, a nie błąd parsowania — czyli plik jest poprawnym zaszyfrowanym PEM-em, tylko
+hasło go nie otwiera.
+
+Przyczyną był **jeden niewidzialny bajt**. Passphrase powstało tak:
+
+```sh
+PASS=$(openssl rand -base64 24 | tr -d '
+')
+```
+
+Na tym systemie `openssl` kończy linię `
+`. `tr` usunął `
+`, a **`` zostało** i weszło w
+skład hasła. Klucz zaszyfrowano trzydziestotrzyznakowym łańcuchem, a do wklejenia podano
+trzydzieści dwa widoczne znaki. Plik `passphrase.txt` miał 33 bajty kończące się na `2f 41 0d`
+— i dopiero to rozstrzygnęło sprawę, bo `trim()` w mojej weryfikacji **naprawiał hasło w
+locie**, więc kontrola wypadała pozytywnie u mnie i negatywnie na produkcji.
+
+Naprawa to przeszyfrowanie klucza czystym hasłem: `openssl rand -hex`, bez `+`, bez `/`, bez
+czegokolwiek, co może się schować albo wymagać ucieczki. Klucz publiczny zostaje ten sam.
+
+**Dlaczego przeszło przez wszystko.** Health check, SPA i hub odpowiadały bez zarzutu, bo żadne
+z nich nie podpisuje tokenu. Weryfikacja też działała — używa klucza *publicznego* — więc złe
+hasło logowania zwracało poprawne 401. Aplikacja nie potrafiła wydać ani jednego tokenu i nikt
+nie miał jak tego zauważyć, dopóki baza była pusta.
+
+Stąd nowy krok w CI: wewnątrz kontenera sprawdzane jest, czy klucz i hasło **się zgadzają** —
+to jedyne miejsce, gdzie oba są razem, bo klucz wypisuje entrypoint z jednej zmiennej, a hasło
+przychodzi w drugiej. Nauka ogólniejsza: sprawdzenie, które przechodzi, bo dotyka innej ścieżki
+niż ta popsuta, jest gorsze od braku sprawdzenia — daje spokój, na który nie zapracowało.
+
 ### Pytania na rozmowę — Stage 8
 
 **Czemu przez hub leci sam identyfikator, a nie mecz?**

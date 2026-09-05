@@ -109,6 +109,25 @@ jobs:
       # capability the kernel cannot honour will not execve at all — a failure that reaches
       # production while every local `docker run` stays green. Dropping everything here is
       # stricter than the platform, so that failure lands in the pull request instead.
+      # A keypair for the container, generated the way a deployment's is: encrypted, handed
+      # over base64, decoded by the entrypoint. The passphrase is written with `printf` rather
+      # than `echo` on purpose — a stray newline inside a passphrase is invisible everywhere
+      # except in the failure it causes, which is how production ended up unable to sign a
+      # single token while every other check stayed green.
+      - name: Mint a keypair for the container
+        id: keys
+        run: |
+          pass=$(openssl rand -hex 20 | tr -d '\r\n')
+          openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:2048 \
+            -aes256 -pass "pass:$pass" -out private.pem
+          openssl pkey -in private.pem -passin "pass:$pass" -pubout -out public.pem
+
+          {
+            echo "passphrase=$pass"
+            echo "private=$(base64 -w0 private.pem)"
+            echo "public=$(base64 -w0 public.pem)"
+          } >> "$GITHUB_OUTPUT"
+
       - name: Start it and ask for the health check
         run: |
           docker run -d --name kickoff-ci -p 8080:8080 \
@@ -116,7 +135,11 @@ jobs:
             -e PORT=8080 \
             -e APP_SECRET=ci-only \
             -e 'DATABASE_URL=postgresql://ci:ci@127.0.0.1:5432/ci?serverVersion=17&charset=utf8' \
-            -e JWT_PASSPHRASE=ci-only \
+            -e JWT_PASSPHRASE='${{ steps.keys.outputs.passphrase }}' \
+            -e JWT_SECRET_KEY_B64='${{ steps.keys.outputs.private }}' \
+            -e JWT_PUBLIC_KEY_B64='${{ steps.keys.outputs.public }}' \
+            -e JWT_SECRET_KEY=/app/config/jwt/private.pem \
+            -e JWT_PUBLIC_KEY=/app/config/jwt/public.pem \
             -e MERCURE_JWT_SECRET=ci-only-hub-secret-at-least-256-bits-long-for-hs256 \
             kickoff:ci
 
@@ -155,6 +178,29 @@ jobs:
           fi
 
           echo "the hub is up and refusing anonymous subscribers"
+
+      # The check that was missing.
+      #
+      # Health, the SPA and the hub all answered perfectly while the deployed key and
+      # passphrase disagreed, so the application could not issue a single token — and nobody
+      # found out until somebody tried to sign in. Verifying inside the container is the only
+      # place the two are together: the key is written there by the entrypoint from one
+      # variable, and the passphrase arrives in another.
+      - name: Check the container can actually sign a token
+        run: |
+          docker exec kickoff-ci php -r '
+            $key = openssl_pkey_get_private(
+              file_get_contents(getenv("JWT_SECRET_KEY")),
+              getenv("JWT_PASSPHRASE"),
+            );
+
+            if (false === $key) {
+              fwrite(STDERR, "the private key and the passphrase do not agree" . PHP_EOL);
+              exit(1);
+            }
+
+            echo "the key opens and can sign" . PHP_EOL;
+          '
 
       - name: Container logs
         if: failure()
