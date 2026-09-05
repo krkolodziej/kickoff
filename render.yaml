@@ -74,6 +74,12 @@ services:
       - key: RUN_RELEASE_ON_START
         value: "true"
 
+      # Signs both the updates this application publishes and the narrow tokens it hands to
+      # browsers. Generated once and kept: rotating it only drops live connections, which
+      # reconnect, but there is no reason to churn it.
+      - key: MERCURE_JWT_SECRET
+        generateValue: true
+
       # And so is a background worker service, so the worker runs inside this container beside
       # the web server. Queued work survives a sleep — it is rows in a table — but the schedule
       # only advances while the instance is awake, so a reminder can arrive late. The fix is a

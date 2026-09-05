@@ -28,6 +28,21 @@ security:
                 success_handler: lexik_jwt_authentication.handler.authentication_success
                 failure_handler: App\Security\ApiAuthenticationFailureHandler
 
+            # Password guessing is the one attack this endpoint exists to invite, and the
+            # defence has to be here rather than in the controller: the authenticator runs
+            # before any controller does.
+            #
+            # The limit is per IP *and* per username, which matters in both directions. Per
+            # username alone lets a botnet spread its attempts across addresses; per IP alone
+            # locks out an office behind one address the moment somebody there mistypes.
+            #
+            # Five in a minute is generous for a person and hopeless for a script. Failed
+            # attempts count; a successful sign-in clears the record, so getting it right on
+            # the sixth try is not punished afterwards.
+            login_throttling:
+                max_attempts: 5
+                interval: '1 minute'
+
         # Exchanges the httpOnly refresh cookie for a new access token.
         # Separate firewall because it authenticates with a different credential entirely.
         refresh:

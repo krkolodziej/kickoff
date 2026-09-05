@@ -117,6 +117,7 @@ jobs:
             -e APP_SECRET=ci-only \
             -e 'DATABASE_URL=postgresql://ci:ci@127.0.0.1:5432/ci?serverVersion=17&charset=utf8' \
             -e JWT_PASSPHRASE=ci-only \
+            -e MERCURE_JWT_SECRET=ci-only-hub-secret-at-least-256-bits-long-for-hs256 \
             kickoff:ci
 
           for attempt in $(seq 1 30); do
@@ -138,6 +139,22 @@ jobs:
         run: |
           curl -fsS http://127.0.0.1:8080/dashboard | grep -q 'id="root"'
           echo "the single-page application is served for its own routes"
+
+      # A hub that is not there answers 404; a hub that is there and has not been given a
+      # token answers 401. Telling those apart is the whole check: the first version of this
+      # shipped a Caddy config that stopped the server from starting at all, and only the
+      # health check above caught it — by accident, because nothing was listening.
+      - name: Check the realtime hub is listening
+        run: |
+          status=$(curl -s -o /dev/null -w '%{http_code}' \
+            'http://127.0.0.1:8080/.well-known/mercure?topic=%2Fmatches%2F1')
+
+          if [ "$status" != "401" ]; then
+            echo "expected 401 from the hub, got $status"
+            exit 1
+          fi
+
+          echo "the hub is up and refusing anonymous subscribers"
 
       - name: Container logs
         if: failure()

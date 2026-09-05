@@ -234,6 +234,41 @@ final class AuthApiTest extends WebTestCase
         );
     }
 
+    /**
+     * The limiter counts per address as well as per account, so these tests are given
+     * addresses of their own.
+     *
+     * Without that, exhausting the count here would exhaust it for every other test in the
+     * suite that signs in from the default 127.0.0.1 — which is how a single new test can
+     * turn a hundred unrelated ones red. Both are in the range reserved for documentation.
+     */
+    private const THROTTLE_IP = '203.0.113.7';
+    private const FUMBLE_IP = '203.0.113.8';
+
+    /**
+     * The counter lives in a cache pool, not in the database, so `ResetDatabase` does not
+     * touch it and it survives from one run of the suite to the next. Left alone, these tests
+     * would pass once and then fail for the rest of the minute — and, worse, pass again later
+     * without anybody changing anything.
+     */
+    private function forgetPreviousAttempts(): void
+    {
+        self::getContainer()->get('cache.rate_limiter')->clear();
+    }
+
+    /**
+     * @param array<string, mixed> $payload
+     */
+    private function postFrom(string $ip, string $uri, array $payload): void
+    {
+        $this->client->request(
+            'POST',
+            $uri,
+            server: ['CONTENT_TYPE' => 'application/json', 'REMOTE_ADDR' => $ip],
+            content: json_encode($payload, \JSON_THROW_ON_ERROR),
+        );
+    }
+
     private function signIn(string $email): string
     {
         $this->post('/api/v1/auth/login', [
@@ -254,5 +289,75 @@ final class AuthApiTest extends WebTestCase
             true,
             flags: \JSON_THROW_ON_ERROR,
         );
+    }
+
+    /**
+     * The one attack this endpoint exists to invite.
+     *
+     * Six attempts against one address, and the sixth is refused before the password is even
+     * looked at. The response says so plainly — 429 with its own code — rather than repeating
+     * "invalid credentials", which would tell a person their correct password was wrong and
+     * tell a script to keep going.
+     *
+     * A fresh address is used so the counter starts at zero regardless of what the rest of
+     * this file did: the limiter counts per address as well as per account, and it outlives a
+     * single test.
+     */
+    public function testRepeatedWrongPasswordsAreThrottled(): void
+    {
+        $this->forgetPreviousAttempts();
+        $user = UserFactory::createOne(['email' => 'throttled@kickoff.test']);
+
+        for ($attempt = 1; $attempt <= 5; ++$attempt) {
+            $this->postFrom(self::THROTTLE_IP, '/api/v1/auth/login', [
+                'email' => $user->getEmail(),
+                'password' => 'not-the-password',
+            ]);
+
+            self::assertResponseStatusCodeSame(
+                Response::HTTP_UNAUTHORIZED,
+                \sprintf('attempt %d should be a plain refusal', $attempt),
+            );
+        }
+
+        $this->postFrom(self::THROTTLE_IP, '/api/v1/auth/login', [
+            'email' => $user->getEmail(),
+            'password' => 'not-the-password',
+        ]);
+
+        self::assertResponseStatusCodeSame(Response::HTTP_TOO_MANY_REQUESTS);
+        self::assertSame('too_many_attempts', $this->json()['code']);
+    }
+
+    /**
+     * And it must not lock out the person who simply mistyped: the limiter is reset by a
+     * successful sign-in, so being wrong twice costs nothing afterwards.
+     */
+    public function testGettingItRightClearsTheCount(): void
+    {
+        $this->forgetPreviousAttempts();
+        $user = UserFactory::createOne(['email' => 'fumbling@kickoff.test']);
+
+        foreach ([1, 2] as $ignored) {
+            $this->postFrom(self::FUMBLE_IP, '/api/v1/auth/login', [
+                'email' => $user->getEmail(),
+                'password' => 'wrong',
+            ]);
+        }
+
+        $this->postFrom(self::FUMBLE_IP, '/api/v1/auth/login', [
+            'email' => $user->getEmail(),
+            'password' => UserFactory::DEFAULT_PASSWORD,
+        ]);
+        self::assertResponseIsSuccessful();
+
+        for ($attempt = 1; $attempt <= 3; ++$attempt) {
+            $this->postFrom(self::FUMBLE_IP, '/api/v1/auth/login', [
+                'email' => $user->getEmail(),
+                'password' => 'wrong',
+            ]);
+
+            self::assertResponseStatusCodeSame(Response::HTTP_UNAUTHORIZED);
+        }
     }
 }

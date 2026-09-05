@@ -10,8 +10,10 @@ use App\Entity\MatchEventType;
 use App\Entity\Player;
 use App\Entity\Team;
 use App\Exception\MatchEventRuleException;
+use App\Message\MatchUpdated;
 use App\Repository\RosterEntryRepository;
 use Doctrine\ORM\EntityManagerInterface;
+use Symfony\Component\Messenger\MessageBusInterface;
 
 /**
  * The rules about who can do what, and when.
@@ -30,6 +32,7 @@ final class MatchEventRecorder
     public function __construct(
         private readonly EntityManagerInterface $entityManager,
         private readonly RosterEntryRepository $rosterEntries,
+        private readonly MessageBusInterface $bus,
     ) {
     }
 
@@ -85,6 +88,11 @@ final class MatchEventRecorder
                 if ($type->movesTheScore()) {
                     $fixture->recordGoalFor($team);
                 }
+
+                // Inside the transaction on purpose. Publishing to a hub is an HTTP call that
+                // cannot be taken back, so it goes through the queue, whose rows roll back
+                // with everything else: a goal that fails to save never reaches a screen.
+                $this->bus->dispatch(new MatchUpdated((int) $fixture->getId()));
 
                 return $event;
             },

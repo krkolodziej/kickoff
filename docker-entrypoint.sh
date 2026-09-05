@@ -31,6 +31,44 @@ if [ "${RUN_RELEASE_ON_START:-false}" = "true" ]; then
     php bin/console doctrine:migrations:migrate --no-interaction --allow-no-migration
 fi
 
+# --- realtime -----------------------------------------------------------------------------
+#
+# The hub runs inside this very process, so the application publishes to itself over the
+# loopback. The port is not known until Render sets it, which is why this is computed here
+# rather than declared as a static environment variable.
+#
+# The public URL is a path, not an absolute address: the browser resolves it against the origin
+# it is already on, so nothing has to know the deployment's hostname.
+export MERCURE_URL="http://127.0.0.1:${PORT:-8080}/.well-known/mercure"
+export MERCURE_PUBLIC_URL="/.well-known/mercure"
+
+# The hub is switched on through the placeholder the image leaves inside its own site block.
+#
+# Not through Caddyfile.d/: that directory is imported at the *global* level and expects whole
+# site blocks, so a bare `mercure` directive dropped there is read as a site address and Caddy
+# refuses to start. CI caught that in ninety seconds, which is the entire reason the image is
+# built and booted there rather than only on the platform.
+#
+# Publisher and subscriber tokens share a secret because the same application mints both: it
+# publishes updates, and it hands out narrow subscriber tokens after deciding, through the
+# ordinary membership rules, who may watch what. There is no `anonymous`, so a subscriber
+# without a token naming the topic receives nothing at all.
+#
+# Guarded, because Caddy refuses to start a hub with no subscriber key and that would take the
+# whole site down over a missing optional secret. The clients already fall back to polling when
+# there is no hub, so a deployment without the secret loses realtime and nothing else.
+#
+# Announced rather than skipped in silence: a feature that quietly does nothing is worse than
+# one that is plainly off, and this line is the only place anybody would find out.
+if [ -n "${MERCURE_JWT_SECRET:-}" ]; then
+    export CADDY_SERVER_EXTRA_DIRECTIVES="mercure {
+    publisher_jwt {env.MERCURE_JWT_SECRET}
+    subscriber_jwt {env.MERCURE_JWT_SECRET}
+}"
+else
+    echo "realtime: MERCURE_JWT_SECRET is not set, so the hub is off and clients will poll"
+fi
+
 # --- background work ---------------------------------------------------------------------
 #
 # The worker runs beside the web server in the same container, because a separate background

@@ -8,6 +8,7 @@ use App\Entity\Fixture;
 use App\Entity\MatchStatus;
 use App\Exception\InvalidTransitionException;
 use App\Message\MatchFinished;
+use App\Message\MatchUpdated;
 use Doctrine\ORM\EntityManagerInterface;
 use Psr\Clock\ClockInterface;
 use Symfony\Component\Messenger\MessageBusInterface;
@@ -87,6 +88,10 @@ final class MatchLifecycle
             if (MatchStatus::Finished === $target) {
                 $this->bus->dispatch(new MatchFinished((int) $fixture->getId()));
             }
+
+            // Every transition is worth streaming, not just the last one: a screen watching a
+            // match should see it kick off, and should stop waiting when it is called off.
+            $this->bus->dispatch(new MatchUpdated((int) $fixture->getId()));
         });
     }
 
